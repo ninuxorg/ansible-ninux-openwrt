@@ -571,17 +571,3 @@ find /var/lib/jenkins/workspace/NinuxOpenwrt/build -name "log-*.log" \
 ## Licenza
 
 GPL-3.0
-
-## Contributors
-
-<table>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/mikysal78">
-        <img src="https://github.com/mikysal78.png" width="100px;" alt=""/>
-        <br />
-        <sub><b>mikysal78</b></sub>
-      </a>
-    </td>
-  </tr>
-</table>
