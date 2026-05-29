@@ -1,9 +1,5 @@
 # ansible-ninux-openwrt
 
-.. image:: https://raw.githubusercontent.com/ninuxorg/ansible-ninux-openwrt/main/docs/nnxx.png
-   :target: http://wiki.ninux.org/nnxx
-
-
 Sistema di build automatizzato per firmware **OpenWrt** per i nodi della rete mesh [Ninux](http://ninux.org).
 
 
