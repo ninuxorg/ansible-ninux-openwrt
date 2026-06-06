@@ -90,7 +90,7 @@ openwisp_orgs:
 # -----------------------------------------------------------------------------
 
 # Abilita upload automatico su OpenWISP dopo la build
-openwisp_upload_enabled: false
+openwisp_upload_enabled: true
 
 # URL base dell'istanza OpenWISP Firmware Upgrader (es. https://openwisp.example.org)
 openwisp_url: "https://controller.nnxx.ninux.org"
@@ -133,7 +133,7 @@ openwisp_upgrade_group: ""
 # -----------------------------------------------------------------------------
 
 # Abilita creazione release GitHub dopo la build
-github_release_enabled: false
+github_release_enabled: true
 
 # Repository GitHub (owner/repo)
 github_repo: "mikysal78/ansible-ninux-openwrt"

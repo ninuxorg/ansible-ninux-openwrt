@@ -106,13 +106,21 @@
     msg: "Category: {{ _ow_category_name }} → {{ _ow_category_id }}"
 
 # ---- 4. Calcola nome build e crea Build --------------------------
+- name: "[OpenWISP] Abbrevia nome VPN per limite 32 caratteri"
+  ansible.builtin.set_fact:
+    _ow_vpn_abbr: >-
+      {{
+        {'NO': 'NO', 'ZeroTier': 'ZT', 'WireGuard': 'WG', 'DualVPN': 'DV'}
+        [openwrt_vpn] | default(openwrt_vpn[:2])
+      }}
+
 - name: "[OpenWISP] Calcola versione build"
   ansible.builtin.set_fact:
     _ow_build_version: >-
       {{
-        openwrt_version ~ '-' ~ openwrt_target ~ '-' ~
+        openwrt_version ~ '-' ~ openwrt_target[:12] ~ '-' ~
         ('CP-' if openwrt_captive_portal | bool else '') ~
-        'VPN-' ~ openwrt_vpn
+        'VPN-' ~ _ow_vpn_abbr
       }}
 
 - name: "[OpenWISP] Cerca build esistente"
