@@ -23,22 +23,57 @@
 # BUILD — Versione e organizzazione
 # -----------------------------------------------------------------------------
 
-# Tag OpenWrt da compilare (es. v25.12.4, v24.10.0, snapshot)
-openwrt_version: "v25.12.4"
+# Tag OpenWrt da compilare (es. v25.12.5, v24.10.0, snapshot)
+openwrt_version: "v25.12.5"
 
 # Organizzazione Ninux attiva — corrisponde a config/organizations/<org>/
-openwrt_org: "default"
+openwrt_org: "basilicata"
+
+# Org di solo esempio: NON compilabili, i loro file servono da template
+# (config/organizations/default/, config/root_files/default/).
+# Una build su queste org si ferma subito con un messaggio esplicativo.
+openwrt_example_orgs:
+  - "default"
 
 # Varianti VPN da compilare per ogni device
-# Valori possibili: NO, ZeroTier, WireGuard, DualVPN
+# Valori possibili: NONE, ZeroTier, WireGuard, Dual
 openwrt_vpn_variants:
-  - "NO"
+  - "NONE"
   - "ZeroTier"
   - "WireGuard"
-  - "DualVPN"
+  - "Dual"
 
-# Compila anche le varianti con Captive Portal (raddoppia le build)
+# Override varianti VPN per organizzazione — vince sulla lista globale.
+# Le org non elencate qui usano openwrt_vpn_variants.
+#
+# basilicata compila SOLO ZeroTier. La variante NONE non e' utilizzabile: la
+# VPN non e' un accessorio ma il trasporto della gestione stessa. Il pacchetto
+# zerotier entra nel firmware solo con questa variante (config/zerotier.ext), e
+# solo con questa viene scritto l'uci-default 99-zerotier che crea
+# l'interfaccia di management owzt07dbf0. Senza, OpenWISP puo' spingere il suo
+# template ZeroTier quanto vuole: non c'e' niente da configurare e il device
+# non diventa mai raggiungibile.
+#
+# WireGuard e' stato tolto (la mesh non lo usa piu'), ma config/wireguard.ext
+# resta nel repo e la lista globale sopra lo elenca: riattivarlo per un'org e'
+# una riga qui. NB: include anche VXLAN.
+openwrt_org_vpn_variants:
+  basilicata:
+    - "ZeroTier"
+
+# Compila anche le varianti con Captive Portal (una build in più per motore CP)
 openwrt_cp_variants: true
+
+# Motori Captive Portal: una build SEPARATA per ognuno.
+# Oggi ne esiste uno solo, uspot (coova-chilli e' stato rimosso).
+openwrt_cp_engines:
+  - "uspot"
+
+# Override motori CP per organizzazione — vince sulla lista globale.
+# Con un solo motore disponibile non serve, resta come esempio.
+# openwrt_org_cp_engines:
+#   basilicata:
+#     - "uspot"
 
 
 # -----------------------------------------------------------------------------
@@ -55,27 +90,41 @@ openwrt_cp_variants: true
 # -----------------------------------------------------------------------------
 
 openwisp_orgs:
-  default:
-    controller_url: "https://controller.nnxx.ninux.org"
-    management_interface: "owzt0d3e97"
+  # default: org di build di esempio — non registrata su OpenWISP.
+  # I firmware "default" vengono compilati senza /etc/config/openwisp.
+  # Per attivarla, decommenta e inserisci i valori reali cifrati:
+  # default:
+  #   controller_url: "https://openwisp.example.org"
+  #   management_interface: "owzABCDE"
+  #   shared_secret: !vault |
+  #         $ANSIBLE_VAULT;1.1;AES256
+  #         # PLACEHOLDER
+  #   api_token: !vault |
+  #         $ANSIBLE_VAULT;1.1;AES256
+  #         # PLACEHOLDER
+
+  basilicata:
+    controller_url: "https://openwisp.ninux-nnxx.it"
+    management_interface: "owzt07dbf0"
     shared_secret: !vault |
           $ANSIBLE_VAULT;1.1;AES256
-          31313339666664336637626461633832666635393766666161393562363661383038653137656130
-          3937393666663435396165356430343930333762663630630a396662366337323366353062336165
-          38396463366265646236333439306266633165336231356239643937343534333532306330383761
-          6161663363616532610a353734363033346633353130336134346162393065316565633734303364
-          3362
+          30313965623566373964646561653230346437333635656163333461383235653233346664633034
+          3931313439666661666666663036313764303439616461660a646135346366353765333932623234
+          33343865376266356265633263303539333364313136663238613439346431363832383265333631
+          3732323531653366350a373432656533353739393463613536626532623437373763363763316435
+          38323063336466336265303430366635363764613838333537623333323065366430313665633637
+          6466353263373337363461363565333063663664666162363837
     api_token: !vault |
           $ANSIBLE_VAULT;1.1;AES256
-          38373862313237353865383835636131343266353765653466393332356536653761373465313562
-          6134363564656333376566396538363739633563396161320a653065306334386335313130373137
-          32623963353532363435663832666333626635356431383161373563393539343237383838313939
-          3866346434636431300a333534346537643035356537643962643063316566633537393830373131
-          36313363653661386139363336666463393965373062383165666633393339306463383934366261
-          6636636231333266363661326464653634333266306261316561
+          32636133376136303237656665356632333238366539353862353563336466386435663430623731
+          6665323730623931373230326631313532363864316566370a636664643736373932643630333463
+          39383661343034633936646561383830643330363235366366366639376262383139323532633538
+          3061383731626437380a343133313464373434646632643133323161333636663863383339343533
+          62393638343033666166393337343531643730303766656131313764363138383361396664346434
+          6539313136653962643265646663613933363734393864316663
 
-  # roma:
-  #   controller_url: "https://controller.nnxx.ninux.org"
+  # esempio:
+  #   controller_url: "https://openwisp.ninux-nnxx.it"
   #   management_interface: "owzABCDE"
   #   shared_secret: !vault |
   #         $ANSIBLE_VAULT;1.1;AES256
@@ -91,29 +140,37 @@ openwisp_orgs:
 
 # Abilita upload automatico su OpenWISP dopo la build
 openwisp_upload_enabled: true
-
 # URL base dell'istanza OpenWISP Firmware Upgrader (es. https://openwisp.example.org)
-openwisp_url: "https://controller.nnxx.ninux.org"
+openwisp_url: "https://openwisp.ninux-nnxx.it"
 
 # Slug dell'organizzazione OpenWISP (nome breve, es. "default")
 # NON necessariamente uguale a openwrt_org
-openwisp_org_slug: "default"
+openwisp_org_slug: "basilicata"
 
 # UUID dell'organizzazione OpenWISP (cifrato con encrypt_string)
 # Recuperabile da: Admin OpenWISP → Organizations → <org> → URL
 # ansible-vault encrypt_string --vault-password-file /var/lib/jenkins/.vault_pass \
 #   'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' --name 'openwisp_org_id'
-openwisp_org_id: !vault |
-          $ANSIBLE_VAULT;1.1;AES256
-          37393939383466303637666435386134343861626232356463386364653763396362303066313534
-          3166353337316263646334303230336166306163343033320a333539373732653062343731346135
-          62303139636662643036613065346662313535323938613834383536616235366137623139343266
-          3561363339643034340a393131643434643162316532373465336535396536313265616133643464
-          66383634363833666233353831636234646438313039626230313861633130313939636335663439
-          3337303962303233653361313138373032623736623737376565
+openwisp_org_id: "3a6e98ba-c021-41eb-be44-65a8130e6aec"
 
 # Nome della category firmware in OpenWISP
 openwisp_category_name: "Ninux {{ openwrt_org | capitalize }} - {{ openwrt_target }}"
+
+# Un upload fallito (controller giu' o irraggiungibile) NON fa fallire la build:
+# il firmware viene comunque archiviato e pubblicato, la variante non caricata
+# finisce in output/.openwisp-upload-failed e Jenkins marca la build UNSTABLE.
+# Mettere true per tornare a far fallire tutta la pipeline.
+openwisp_upload_fatal: false
+
+# Se la build con la stessa versione esiste gia' su OpenWISP, la sostituisce
+# (la cancella e la ricrea). Con false verrebbe riusata e il firmware caricato
+# resterebbe quello VECCHIO: l'upload di un'immagine duplicata risponde 400.
+openwisp_replace_build: true
+
+# Retention: quante versioni OpenWrt tenere su OpenWISP per ogni device.
+# Le build piu' vecchie (e le loro immagini) vengono cancellate dopo l'upload.
+# 0 = disabilita la retention, non cancella nulla.
+openwisp_keep_versions: 3
 
 # Avvia batch upgrade su tutti i device dopo l'upload
 openwisp_trigger_upgrade: false
@@ -218,7 +275,6 @@ openwrt_clean_build_targets:
 # -----------------------------------------------------------------------------
 
 openwrt_feeds:
-  - "src-git chilli https://github.com/mikysal78/coova-chilli-openwrt.git"
   - "src-git openwisp_config https://github.com/openwisp/openwisp-config.git"
   - "src-git openwisp_monitoring https://github.com/openwisp/openwrt-openwisp-monitoring.git"
   - "src-git zerotier https://github.com/mwarning/zerotier-openwrt.git"
@@ -259,3 +315,5 @@ openwrt_build_deps:
   - liblzma-dev
   - libpam0g-dev
   - cpio
+  # scompattare il tarball dell'ImageBuilder (.tar.zst)
+  - zstd

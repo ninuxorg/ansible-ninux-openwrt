@@ -1,0 +1,6 @@
+#!/bin/sh
+# Finto ./scripts/feeds: i feed veri richiedono una rete e centinaia di MB di
+# clone. Qui basta uscire con successo registrando la chiamata, cosi' il test
+# verifica che feeds.yml venga eseguito con gli argomenti giusti.
+echo "stub feeds $*" >> feeds-stub.log
+exit 0

@@ -1,0 +1,37 @@
+# /etc/config/openwisp
+# ESEMPIO — org 'default': valori placeholder, il nodo NON si registra.
+# Sostituisci url, shared_secret e management_interface con i dati reali
+# della tua organizzazione, poi: /etc/init.d/openwisp_config restart
+#
+# Se l'org viene configurata in ninux.yml (openwisp_orgs), questo file
+# viene rigenerato automaticamente dalla build e sovrascritto.
+
+config controller 'http'
+	option url 'https://openwisp.example.org'
+	option interval '120'
+	option management_interval '10'
+	#option registration_interval '30'
+	option verify_ssl '1'
+	option shared_secret 'CAMBIAMI-shared-secret-org'
+	#option consistent_key '1'
+	#option mac_interface 'eth0'
+	option management_interface 'wg0'
+	#option merge_config '1'
+	#option tags ''
+	#option test_config '1'
+	#option test_script '/usr/sbin/mytest'
+	#option hardware_id_script '/usr/sbin/read_hw_id'
+	#option hardware_id_key '1'
+	#option bootup_delay '0'
+	#option uuid ''
+	#option key ''
+	# curl options
+	#option connect_timeout '15'
+	#option max_time '30'
+	#option capath '/etc/ssl/certs'
+	#option cacert '/etc/ssl/certs/ca-certificates.crt'
+	#option checksum_max_retries '5'
+	#option checksum_retry_delay '6'
+	# hooks
+	#option pre_reload_hook '/usr/sbin/my_pre_reload_hook'
+	#option post_reload_hook '/usr/sbin/my_post_reload_hook'

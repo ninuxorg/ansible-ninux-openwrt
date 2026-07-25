@@ -1,0 +1,92 @@
+---
+name: CI
+
+# La compilazione vera resta su Jenkins: un firmware OpenWrt da sorgenti sono
+# ore di build e decine di GB, fuori scala per un runner GitHub. Qui si prova
+# tutto il resto, che e' dove nascono gli errori: quali pacchetti finiscono in
+# quale variante, quali file di config entrano nell'immagine, e cosa succede
+# sul controller OpenWISP (sostituzione build e retention).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Lint (yaml, ansible, shell)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Installa gli strumenti
+        run: pip install -r requirements-dev.txt
+
+      - name: yamllint
+        run: yamllint .
+
+      - name: ansible-lint
+        run: ansible-lint
+
+      # ninux.yml contiene segreti cifrati con ansible-vault: la password NON
+      # sta su GitHub. Il syntax-check non li decifra, quindi funziona lo stesso.
+      - name: Syntax check dei playbook
+        run: |
+          for playbook in playbooks/*.yml; do
+            case "$(basename "$playbook")" in
+              _*) continue ;;   # tasks file, non playbook
+            esac
+            echo "=== $playbook"
+            ansible-playbook "$playbook" --syntax-check
+          done
+
+      - name: shellcheck (uci-defaults e script di setup)
+        run: shellcheck -S warning config/root_files/*/etc/uci-defaults/* setup/*.sh
+
+  test:
+    name: Test (simula un device)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Installa gli strumenti
+        run: pip install -r requirements-dev.txt
+
+      # Esegue il ruolo per davvero su un device finto: toolchain OpenWrt e
+      # controller OpenWISP sono stub (molecule/default/files/).
+      - name: Molecule (un device, tre varianti, OpenWISP mock)
+        run: molecule test
+
+      # cleanup.yml deve funzionare anche su una workdir vuota o parziale
+      # (workspace Jenkins al primo giro, .ccache/ mai creata): una regressione
+      # qui e' gia' successa con pipefail + du su directory mancante.
+      - name: cleanup.yml su una workdir vuota
+        run: |
+          mkdir -p "$RUNNER_TEMP/cleanup-vuota"
+          ansible-playbook playbooks/cleanup.yml \
+            -e openwrt_work_dir="$RUNNER_TEMP/cleanup-vuota"
+
+      # Le org di esempio (default) non devono essere compilabili: i loro file
+      # servono da template per creare una nuova organizzazione.
+      - name: Una build su un'org di esempio deve essere rifiutata
+        run: |
+          if ansible-playbook playbooks/build_all.yml \
+               -e openwrt_org=default \
+               -e openwrt_work_dir="$RUNNER_TEMP/build" ; then
+            echo "ERRORE: la build sull'org di esempio 'default' non e' stata bloccata"
+            exit 1
+          fi
+          echo "OK: org di esempio rifiutata"

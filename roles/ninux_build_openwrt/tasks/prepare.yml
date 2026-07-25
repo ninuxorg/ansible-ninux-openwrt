@@ -37,7 +37,7 @@
   when: openwrt_ccache_enabled | bool
   changed_when: false
 
-- name: ccache stats
+- name: Mostra statistiche ccache
   ansible.builtin.debug:
     msg: "{{ _ccache_stats.stdout_lines }}"
   when: openwrt_ccache_enabled | bool

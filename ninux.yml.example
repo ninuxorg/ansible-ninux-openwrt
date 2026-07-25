@@ -30,12 +30,12 @@ openwrt_version: "v25.12.4"
 openwrt_org: "default"
 
 # Varianti VPN da compilare per ogni device
-# Valori possibili: NO, ZeroTier, WireGuard, DualVPN
+# Valori possibili: NONE, ZeroTier, WireGuard, Dual
 openwrt_vpn_variants:
-  - "NO"
+  - "NONE"
   - "ZeroTier"
   - "WireGuard"
-  - "DualVPN"
+  - "Dual"
 
 # Compila anche le varianti con Captive Portal (raddoppia le build)
 openwrt_cp_variants: true
@@ -56,7 +56,7 @@ openwrt_cp_variants: true
 
 openwisp_orgs:
   default:
-    controller_url: "https://controller.nnxx.ninux.org"
+    controller_url: "https://openwisp.ninux-nnxx.it"
     management_interface: "owz12345"
     shared_secret: !vault |
           $ANSIBLE_VAULT;1.1;AES256
@@ -66,8 +66,8 @@ openwisp_orgs:
           # PLACEHOLDER — Token API utente OpenWISP per org default
           # Admin OpenWISP → Users → <utente org> → API Keys
           # ansible-vault encrypt_string ... 'IL_TOKEN' --name 'api_token'
-  # roma:
-  #   controller_url: "https://controller.nnxx.ninux.org"
+  # esempio:
+  #   controller_url: "https://openwisp.ninux-nnxx.it"
   #   management_interface: "owzABCDE"
   #   shared_secret: !vault |
   #         $ANSIBLE_VAULT;1.1;AES256
@@ -207,7 +207,6 @@ openwrt_clean_build_targets:
 # -----------------------------------------------------------------------------
 
 openwrt_feeds:
-  - "src-git chilli https://github.com/mikysal78/coova-chilli-openwrt.git"
   - "src-git openwisp_config https://github.com/openwisp/openwisp-config.git"
   - "src-git openwisp_monitoring https://github.com/openwisp/openwrt-openwisp-monitoring.git"
   - "src-git zerotier https://github.com/mwarning/zerotier-openwrt.git"

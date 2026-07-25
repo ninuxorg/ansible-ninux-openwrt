@@ -1,0 +1,30 @@
+---
+# Configurazione ansible-lint (CI GitHub e locale: ansible-lint)
+
+exclude_paths:
+  - build/
+  - output/
+  - .github/
+  - molecule/default/files/
+
+# I file playbooks/_*.yml NON sono playbook ma tasks file inclusi con
+# include_tasks: senza questa riga ansible-lint li interpreta come playbook
+# e segnala un falso "syntax-check: include_role is not a valid attribute
+# for a Play".
+kinds:
+  - tasks: "**/playbooks/_*.yml"
+
+skip_list:
+  # Le variabili (openwrt_*, openwisp_*) sono condivise tra ruolo, playbook,
+  # ninux.yml e Jenkinsfile: prefissarle col nome del ruolo romperebbe tutto.
+  - var-naming[no-role-prefix]
+  # git/curl/mount sono usati di proposito:
+  #  - git: serve checkout -f su tag, il modulo git non fa il force reset
+  #  - curl: upload multipart binario su OpenWISP (uri non lo gestisce bene)
+  #  - mount: tmpfs volatile, non va scritto in fstab
+  - command-instead-of-module
+  # I comandi di build sono per natura non idempotenti (make, feeds update)
+  - no-changed-when
+  # I nomi dei task riportano la variante compilata: il Jinja in mezzo al
+  # nome e' voluto, serve a distinguere le build nei log di Jenkins.
+  - name[template]

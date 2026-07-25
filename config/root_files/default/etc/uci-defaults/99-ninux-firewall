@@ -1,0 +1,36 @@
+#!/bin/sh
+# Zona firewall "ninux" per le interfacce gestite da OpenWISP (management + mesh).
+#
+# I file in /etc/uci-defaults/ vengono eseguiti UNA VOLTA al primo boot e poi
+# rimossi (se ritornano 0).
+#
+# Perche' serve: ZeroTier (owzt0d3e97, management + mesh Babel) e mesh
+# (br-mesh, 802.11s) le crea OpenWISP/uci DOPO il primo boot; senza una zona che
+# le contenga cadono nella policy di input REJECT dell'immagine base e il router
+# rifiuta tutto in ingresso (il monitoring non lo pinga, Babel non peera).
+# La zona puo' riferirsi a reti non ancora esistenti: quando l'interfaccia sale,
+# netifd ricarica il firewall e la aggancia da sola.
+#
+# Zona completamente aperta (input/output/forward ACCEPT) con forwarding
+# bidirezionale verso la lan, cosi' anche i client degli AP entrano nel mesh.
+# Named-section idempotente: rieseguire lo script non duplica nulla.
+
+uci -q batch <<'EOF'
+set firewall.ninux=zone
+set firewall.ninux.name='ninux'
+set firewall.ninux.input='ACCEPT'
+set firewall.ninux.output='ACCEPT'
+set firewall.ninux.forward='ACCEPT'
+delete firewall.ninux.network
+add_list firewall.ninux.network='ZeroTier'
+add_list firewall.ninux.network='mesh'
+set firewall.ninux_lan=forwarding
+set firewall.ninux_lan.src='ninux'
+set firewall.ninux_lan.dest='lan'
+set firewall.lan_ninux=forwarding
+set firewall.lan_ninux.src='lan'
+set firewall.lan_ninux.dest='ninux'
+commit firewall
+EOF
+
+exit 0

@@ -9,11 +9,12 @@
     openwrt_target: "{{ target_item }}"
     openwrt_vpn: "{{ variant_item.vpn }}"
     openwrt_captive_portal: "{{ variant_item.cp }}"
+    openwrt_cp_engine: "{{ variant_item.engine | default('uspot') }}"
     openwrt_cleanup_after_build: false
   loop: "{{ _variant_matrix }}"
   loop_control:
     loop_var: variant_item
-    label: "{{ target_item }} VPN={{ variant_item.vpn }} CP={{ variant_item.cp }}"
+    label: "{{ target_item }} VPN={{ variant_item.vpn }} CP={{ variant_item.engine if variant_item.cp else 'NO' }}"
 
 - name: "[ {{ target_item }} ] Pulizia post-device"
   ansible.builtin.shell: |

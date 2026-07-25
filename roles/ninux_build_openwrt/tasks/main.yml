@@ -1,7 +1,51 @@
 ---
 # ============================================================
 # ninux_build_openwrt - tasks/main.yml
+#
+# Il ruolo ha tre modalita' (openwrt_role_mode):
+#
+#   full      percorso storico: una compilazione completa per variante.
+#   ib-seed   compila UNA volta il superset di un gruppo di varianti e ne
+#             conserva l'ImageBuilder.
+#   ib-image  assembla una variante partendo da quell'ImageBuilder, senza
+#             compilare nulla.
+#
+# 'full' resta il default: il percorso ImageBuilder si attiva da
+# openwrt_use_imagebuilder (vedi playbooks/build_all.yml).
 # ============================================================
+
+- name: Normalizza il nome della variante VPN
+  ansible.builtin.set_fact:
+    _vpn: "{{ openwrt_vpn_aliases[openwrt_vpn | lower] | default(openwrt_vpn) }}"
+  tags: [always]
+
+- name: Valida variante VPN
+  ansible.builtin.assert:
+    that:
+      - _vpn in ['NONE', 'ZeroTier', 'WireGuard', 'Dual']
+    fail_msg: >
+      Variante VPN '{{ openwrt_vpn }}' non valida.
+      Valori ammessi: NONE, ZeroTier, WireGuard, Dual.
+  tags: [always]
+
+- name: Valida modalita' del ruolo
+  ansible.builtin.assert:
+    that:
+      - openwrt_role_mode in ['full', 'ib-seed', 'ib-image']
+    fail_msg: >
+      openwrt_role_mode '{{ openwrt_role_mode }}' non valida.
+      Valori ammessi: full, ib-seed, ib-image.
+  tags: [always]
+
+# Motori Captive Portal dell'org: il seed li compila tutti insieme, e ogni
+# variante nega quelli che non usa. Stessa risoluzione fatta da build_all.yml
+# per la matrice, ripetuta qui per non dipendere dal playbook chiamante.
+- name: Risolvi i motori Captive Portal dell'org
+  ansible.builtin.set_fact:
+    _ib_cp_engines: >-
+      {{ (openwrt_org_cp_engines | default({}))[openwrt_org] | default(openwrt_cp_engines) }}
+  when: openwrt_role_mode in ['ib-seed', 'ib-image']
+  tags: [always]
 
 - name: Install build dependencies
   ansible.builtin.include_tasks: deps.yml
@@ -15,28 +59,57 @@
   ansible.builtin.include_tasks: clone_ninux.yml
   tags: [clone]
 
+- name: Check ImageBuilder cache
+  ansible.builtin.include_tasks: ib_cache_check.yml
+  when: openwrt_role_mode in ['ib-seed', 'ib-image']
+  tags: [always]
+
+# I sorgenti e i feed servono solo a chi compila davvero: in ib-image l'albero
+# OpenWrt non viene toccato, e in ib-seed nemmeno se l'ImageBuilder e' gia' in
+# cache (il seed verrebbe saltato subito dopo).
 - name: Clone / update OpenWrt upstream source
   ansible.builtin.include_tasks: clone_openwrt.yml
+  when: openwrt_role_mode == 'full' or
+        (openwrt_role_mode == 'ib-seed' and not _ib_seed_ready | default(false) | bool)
   tags: [clone, openwrt]
 
+# L'overlay e' specifico della variante: nel seed non serve (la sua immagine
+# viene scartata) e anzi la sporcherebbe.
 - name: Configure root_files overlay
   ansible.builtin.include_tasks: rootfiles.yml
+  when: openwrt_role_mode in ['full', 'ib-image']
   tags: [rootfiles, config]
 
 - name: Configure feeds
   ansible.builtin.include_tasks: feeds.yml
+  when: openwrt_role_mode == 'full' or
+        (openwrt_role_mode == 'ib-seed' and not _ib_seed_ready | default(false) | bool)
   tags: [feeds, config]
 
+# In ib-seed il .config lo compone ib_dotconfig.yml (superset del gruppo).
 - name: Configure .config for target
   ansible.builtin.include_tasks: dotconfig.yml
+  when: openwrt_role_mode == 'full'
   tags: [dotconfig, config]
 
 - name: Build firmware
   ansible.builtin.include_tasks: build.yml
+  when: openwrt_role_mode == 'full'
+  tags: [build]
+
+- name: Build ImageBuilder seed
+  ansible.builtin.include_tasks: ib_seed.yml
+  when: openwrt_role_mode == 'ib-seed'
+  tags: [build]
+
+- name: Assemble variant image from ImageBuilder
+  ansible.builtin.include_tasks: ib_image.yml
+  when: openwrt_role_mode == 'ib-image'
   tags: [build]
 
 - name: Collect artifacts
   ansible.builtin.include_tasks: artifacts.yml
+  when: openwrt_role_mode in ['full', 'ib-image']
   tags: [artifacts]
 
 # Nota: l'upload OpenWISP è incluso direttamente da artifacts.yml

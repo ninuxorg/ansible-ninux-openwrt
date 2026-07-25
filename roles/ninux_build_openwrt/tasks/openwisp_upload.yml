@@ -17,6 +17,13 @@
     _ow_token: "{{ _ow_token_global }}"
   no_log: true
 
+# I set_fact sopravvivono tra le varianti: senza reset, se questa variante
+# fallisce PRIMA dell'upload, la diagnostica nel rescue mostrerebbe le
+# risposte della variante precedente.
+- name: "[OpenWISP] Azzera l'esito upload della variante precedente"
+  ansible.builtin.set_fact:
+    _ow_upload_result: {}
+
 # ---- 2. Risolvi UUID organizzazione ------------------------------
 - name: "[OpenWISP] Cerca organizzazione per slug"
   ansible.builtin.uri:
@@ -110,8 +117,16 @@
   ansible.builtin.set_fact:
     _ow_vpn_abbr: >-
       {{
-        {'NO': 'NO', 'ZeroTier': 'ZT', 'WireGuard': 'WG', 'DualVPN': 'DV'}
-        [openwrt_vpn] | default(openwrt_vpn[:2])
+        {'NONE': 'NO', 'ZeroTier': 'ZT', 'WireGuard': 'WG', 'Dual': 'DV'}
+        [_vpn] | default(_vpn[:2])
+      }}
+
+- name: "[OpenWISP] Abbrevia motore Captive Portal"
+  ansible.builtin.set_fact:
+    _ow_cp_abbr: >-
+      {{
+        '' if not openwrt_captive_portal | bool
+        else 'US-'
       }}
 
 - name: "[OpenWISP] Calcola versione build"
@@ -119,8 +134,7 @@
     _ow_build_version: >-
       {{
         openwrt_version ~ '-' ~ openwrt_target[:12] ~ '-' ~
-        ('CP-' if openwrt_captive_portal | bool else '') ~
-        'VPN-' ~ _ow_vpn_abbr
+        _ow_cp_abbr ~ 'VPN-' ~ _ow_vpn_abbr
       }}
 
 - name: "[OpenWISP] Cerca build esistente"
@@ -141,6 +155,20 @@
         | list | first | default({})
       }}
 
+# Stessa versione gia' presente: la build viene SOSTITUITA, non riusata.
+# Riusarla lascerebbe online il firmware vecchio: l'upload di un'immagine
+# duplicata risponde 400 e non rimpiazza il file gia' caricato.
+- name: "[OpenWISP] Elimina la build con la stessa versione (verra' ricreata)"
+  ansible.builtin.uri:
+    url: "{{ openwisp_url }}/api/v1/firmware-upgrader/build/{{ _ow_existing_build.id }}/"
+    method: DELETE
+    headers:
+      Authorization: "Bearer {{ _ow_token }}"
+    status_code: [204, 404]
+  when:
+    - _ow_existing_build | length > 0
+    - openwisp_replace_build | bool
+
 - name: "[OpenWISP] Crea nuovo Build"
   ansible.builtin.uri:
     url: "{{ openwisp_url }}/api/v1/firmware-upgrader/build/"
@@ -155,18 +183,18 @@
       changelog: >-
         Build automatica Jenkins.
         Org={{ openwrt_org }} Target={{ openwrt_target }}
-        VPN={{ openwrt_vpn }} CP={{ openwrt_captive_portal }}
+        VPN={{ _vpn }} CP={{ openwrt_cp_engine if openwrt_captive_portal | bool else 'NONE' }}
         Data={{ ansible_date_time.iso8601 }}
     status_code: 201
   register: _ow_build_created
-  when: _ow_existing_build | length == 0
+  when: _ow_existing_build | length == 0 or openwisp_replace_build | bool
 
 - name: "[OpenWISP] Imposta ID build"
   ansible.builtin.set_fact:
     _ow_build_id: >-
       {{
         _ow_existing_build.id
-        if _ow_existing_build | length > 0
+        if _ow_build_created is skipped
         else _ow_build_created.json.id
       }}
 
@@ -174,7 +202,8 @@
   ansible.builtin.debug:
     msg: >-
       Build: {{ _ow_build_version }} → {{ _ow_build_id }}
-      {{ '(esistente)' if _ow_existing_build | length > 0 else '(nuova)' }}
+      {{ '(sostituita)' if (_ow_existing_build | length > 0 and openwisp_replace_build | bool)
+         else ('(esistente)' if _ow_build_created is skipped else '(nuova)') }}
 
 # ---- 5. Trova file sysupgrade ------------------------------------
 - name: "[OpenWISP] Cerca file sysupgrade"
@@ -201,18 +230,35 @@
       Upload saltato per questa variante.
   when: _ow_sysupgrade_files.files | length == 0
 
+# L'output e' "corpo della risposta + ultima riga = http code" (-w "\n%{http_code}").
+# Un 400 e' accettabile SOLO se e' un duplicato vero ("unique set" nel corpo):
+# qualsiasi altro 400 (es. 'type' dell'immagine non riconosciuto dal controller)
+# e' un upload NON riuscito e deve fallire, non finire nel conteggio dei
+# "gia' presenti" — e' successo con zyxel_nwa50ax-pro: build nuova, 400,
+# e il firmware non era mai arrivato sul controller.
+# Il `type` NON è il nome file prodotto da OpenWrt (con versione e profilo
+# moderno): è la chiave della hardware map di OpenWISP, presa da
+# openwisp_image_type_map[openwrt_target]. Vedi config/build.yml.
 - name: "[OpenWISP] Carica sysupgrade"
   ansible.builtin.command:
     cmd: >-
-      curl -s -o /tmp/ow_upload_response.json -w "%{http_code}"
-      -X POST
+      curl -s -X POST
       -H "Authorization: Bearer {{ _ow_token }}"
       -F "file=@{{ item.path }}"
-      -F "type={{ item.path | basename | regex_replace('^openwrt-', '') }}"
+      -F "type={{ openwisp_image_type_map[openwrt_target] }}"
+      -w "\n%{http_code}"
       {{ openwisp_url }}/api/v1/firmware-upgrader/build/{{ _ow_build_id }}/image/
   register: _ow_upload_result
-  changed_when: _ow_upload_result.stdout | int == 201
-  failed_when: _ow_upload_result.stdout | int not in [201, 400]
+  vars:
+    # ultima riga dello stdout = http code; default a '' se curl non ha
+    # prodotto output (errore di rete): [-1] su lista vuota esploderebbe
+    _up_code: "{{ _ow_upload_result.stdout_lines | default(['']) | last }}"
+  changed_when: _up_code == '201'
+  failed_when: >-
+    _ow_upload_result.rc | default(1) != 0
+    or _up_code not in ['201', '400']
+    or (_up_code == '400'
+        and 'unique' not in _ow_upload_result.stdout | default('') | lower)
   loop: "{{ _ow_sysupgrade_files.files }}"
   loop_control:
     label: "{{ item.path | basename }}"
@@ -223,11 +269,70 @@
   ansible.builtin.debug:
     msg: >-
       Caricati {{ _ow_upload_result.results
-        | selectattr('stdout', 'equalto', '201') | list | length }}
+        | map(attribute='stdout_lines') | map('last')
+        | select('equalto', '201') | list | length }}
       sysupgrade su Build {{ _ow_build_id }}
       ({{ _ow_upload_result.results
-        | selectattr('stdout', 'equalto', '400') | list | length }} già presenti)
+        | map(attribute='stdout_lines') | map('last')
+        | select('equalto', '400') | list | length }} già presenti)
   when: _ow_sysupgrade_files.files | length > 0
+
+# ---- 6b. Retention: tieni solo le ultime N versioni OpenWrt -------
+# Le build sono una per (versione x variante) dentro la category del device:
+# la retention ragiona per VERSIONE OpenWrt, non per singola build, altrimenti
+# cancellerebbe varianti VPN/CP della stessa compilazione.
+- name: "[OpenWISP] Rileggi le build della category (retention)"
+  ansible.builtin.uri:
+    url: "{{ openwisp_url }}/api/v1/firmware-upgrader/build/?category={{ _ow_category_id }}&page_size=1000"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _ow_token }}"
+    status_code: 200
+  register: _ow_builds_all
+  when: openwisp_keep_versions | int > 0
+
+- name: "[OpenWISP] Calcola le versioni da mantenere"
+  ansible.builtin.set_fact:
+    _ow_builds_desc: >-
+      {{ _ow_builds_all.json.results | sort(attribute='created', reverse=true) }}
+  when: openwisp_keep_versions | int > 0
+
+# NB: niente regex_replace con backreference qui — dentro un `when:` la '\1'
+# non viene interpretata e la condizione diverrebbe vera per TUTTE le build
+# (cancellazione totale dello storico). split('-')[0] e' affidabile in entrambi
+# i contesti: la versione build e' sempre "<openwrt_version>-<target>-...".
+- name: "[OpenWISP] Ultime {{ openwisp_keep_versions }} versioni da tenere"
+  ansible.builtin.set_fact:
+    _ow_keep_versions: >-
+      {{
+        (_ow_builds_desc
+         | map(attribute='version')
+         | map('split', '-')
+         | map('first')
+         | list | unique)[:openwisp_keep_versions | int]
+      }}
+  when: openwisp_keep_versions | int > 0
+
+- name: "[OpenWISP] Retention: {{ _ow_category_name }}"
+  ansible.builtin.debug:
+    msg: >-
+      Versioni mantenute: {{ _ow_keep_versions | join(', ') }}
+      ({{ _ow_builds_desc | length }} build nella category)
+  when: openwisp_keep_versions | int > 0
+
+- name: "[OpenWISP] Elimina le build delle versioni piu' vecchie"
+  ansible.builtin.uri:
+    url: "{{ openwisp_url }}/api/v1/firmware-upgrader/build/{{ item.id }}/"
+    method: DELETE
+    headers:
+      Authorization: "Bearer {{ _ow_token }}"
+    status_code: [204, 404]
+  loop: "{{ _ow_builds_desc | default([]) }}"
+  loop_control:
+    label: "{{ item.version }}"
+  when:
+    - openwisp_keep_versions | int > 0
+    - item.version.split('-')[0] not in _ow_keep_versions
 
 # ---- 7. Batch upgrade (opzionale) --------------------------------
 - name: "[OpenWISP] Preview device da aggiornare"

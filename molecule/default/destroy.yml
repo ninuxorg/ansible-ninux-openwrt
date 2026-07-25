@@ -1,0 +1,15 @@
+---
+# destroy: spegne il mock OpenWISP. La work dir resta (utile per capire un
+# fallimento) e viene comunque azzerata dal prepare del giro successivo.
+
+- name: Spegni il controller OpenWISP finto
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: Ferma il mock OpenWISP
+      ansible.builtin.command:
+        cmd: pkill -f mock_openwisp.py
+      register: _pkill
+      failed_when: false
+      changed_when: _pkill.rc == 0

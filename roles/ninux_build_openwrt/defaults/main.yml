@@ -7,11 +7,29 @@
 # Questo evita ambiguita' su playbook_dir dentro i ruoli.
 # ============================================================
 
-openwrt_version: "v25.12.4"
+openwrt_version: "v25.12.5"
 openwrt_target: "glinet_gl-mt300n-v2"
 openwrt_org: "default"
 openwrt_captive_portal: false
-openwrt_vpn: "NO"
+# Motore Captive Portal della singola build
+openwrt_cp_engine: "uspot"
+# Motori CP per cui generare una build separata quando openwrt_cp_variants: true
+openwrt_cp_engines:
+  - "uspot"
+openwrt_vpn: "NONE"
+
+# Modalita' del ruolo: full | ib-seed | ib-image (vedi tasks/main.yml)
+openwrt_role_mode: "full"
+
+# Alias accettati per le varianti VPN (chiave in minuscolo -> nome canonico).
+# Canonici: NONE, ZeroTier, WireGuard, Dual
+openwrt_vpn_aliases:
+  none: "NONE"
+  "no": "NONE"
+  zerotier: "ZeroTier"
+  wireguard: "WireGuard"
+  dual: "Dual"
+  dualvpn: "Dual"
 openwrt_build_user: "{{ ansible_user_id }}"
 
 # Questi path dipendono da openwrt_work_dir che viene dal playbook
@@ -26,6 +44,13 @@ openwrt_ccache_enabled: true
 openwrt_ccache_dir: "/var/cache/openwrt-ccache"
 openwrt_ccache_maxsize: "20G"
 
+# ImageBuilder: vedi config/build.yml per la spiegazione completa.
+# force_seed attivo: la chiave di cache non tiene conto del contenuto della
+# configurazione, quindi riusare un seed vecchio darebbe firmware sbagliati.
+openwrt_use_imagebuilder: true
+openwrt_ib_cache_dir: "{{ openwrt_build_basedir }}/imagebuilder"
+openwrt_ib_force_seed: true
+
 openwrt_tmpfs_enabled: true
 openwrt_tmpfs_size: "8G"
 openwrt_tmpfs_path: "/mnt/openwrt-tmpfs"
@@ -36,7 +61,6 @@ openwrt_make_jobs_extra: 2
 openwrt_upstream_repo: "https://github.com/openwrt/openwrt.git"
 
 openwrt_feeds:
-  - "src-git chilli https://github.com/mikysal78/coova-chilli-openwrt.git"
   - "src-git openwisp_config https://github.com/openwisp/openwisp-config.git"
   - "src-git openwisp_monitoring https://github.com/openwisp/openwrt-openwisp-monitoring.git"
   - "src-git zerotier https://github.com/mwarning/zerotier-openwrt.git"
@@ -78,6 +102,8 @@ openwrt_build_deps:
   - liblzma-dev
   - libpam0g-dev
   - cpio
+  # scompattare il tarball dell'ImageBuilder (.tar.zst)
+  - zstd
 
 openwisp_upload_enabled: false
 openwisp_url: ""
@@ -86,8 +112,32 @@ openwisp_password: ""
 openwisp_org_slug: "{{ openwrt_org }}"
 openwisp_org_id: ""
 openwisp_category_name: "Ninux {{ openwrt_org | capitalize }} - {{ openwrt_target }}"
+# Se l'upload fallisce (controller giu'/irraggiungibile) la build NON fallisce:
+# il firmware resta compilato e archiviato, e la variante viene annotata in
+# output/.openwisp-upload-failed (Jenkins la legge e marca la build UNSTABLE).
+# true = un upload fallito fa fallire tutta la pipeline, come prima.
+openwisp_upload_fatal: false
+
+# Sostituisci la build se la versione esiste gia' (evita firmware vecchio online)
+openwisp_replace_build: true
+# Quante versioni OpenWrt tenere su OpenWISP per device (0 = retention disattivata)
+openwisp_keep_versions: 3
 openwisp_trigger_upgrade: false
 openwisp_upgrade_group: ""
+
+# Mappa target OpenWrt -> "type" immagine atteso da OpenWISP.
+# OpenWISP abbina device e firmware sul campo `type` dell'upload, non sul nome
+# del file: deve coincidere con una chiave di OPENWRT_FIRMWARE_IMAGE_MAP
+# (openwisp_firmware_upgrader/hardware.py). Un target assente qui viene saltato
+# in upload e annotato in output/.openwisp-unsupported. Override in config/build.yml.
+openwisp_image_type_map:
+  glinet_gl-mt300n-v2: "ramips-mt76x8-gl-mt300n-v2-squashfs-sysupgrade.bin"
+  linksys_wrt3200acm: "mvebu-cortexa9-linksys_wrt3200acm-squashfs-sysupgrade.img"
+  x86_64: "x86-64-generic-squashfs-combined-efi.img.gz"
+  # Custom su controller (OPENWISP_CUSTOM_OPENWRT_IMAGES, playbook openwisp2)
+  totolink_X5000R: "ramips-mt7621-totolink_x5000r-squashfs-sysupgrade.bin"
+  tplink_c2600: "ipq806x-generic-tplink_c2600-squashfs-sysupgrade.bin"
+  zyxel_nwa50ax-pro: "mediatek-filogic-zyxel_nwa50ax-pro-squashfs-sysupgrade.bin"
 
 # openwisp-config (agente sul firmware)
 # La configurazione per org è in ninux.yml (sezione openwisp_orgs)

@@ -25,22 +25,35 @@
     mode: "0644"
 
 - name: Appendi estensione Captive Portal
-  ansible.builtin.shell: cat {{ openwrt_ninux_src_dir }}/chilli.ext >> {{ openwrt_src_dir }}/.config
+  ansible.builtin.shell: >
+    cat {{ openwrt_ninux_src_dir }}/{{ openwrt_cp_engine }}.ext >> {{ openwrt_src_dir }}/.config
   when: openwrt_captive_portal | bool
   changed_when: true
 
 - name: Appendi estensione ZeroTier
   ansible.builtin.shell: cat {{ openwrt_ninux_src_dir }}/zerotier.ext >> {{ openwrt_src_dir }}/.config
-  when: openwrt_vpn in ['ZeroTier', 'DualVPN']
+  when: _vpn in ['ZeroTier', 'Dual']
   changed_when: true
 
 - name: Appendi estensione WireGuard
   ansible.builtin.shell: cat {{ openwrt_ninux_src_dir }}/wireguard.ext >> {{ openwrt_src_dir }}/.config
-  when: openwrt_vpn in ['WireGuard', 'DualVPN']
+  when: _vpn in ['WireGuard', 'Dual']
   changed_when: true
 
 - name: Appendi config base comune
   ansible.builtin.shell: cat {{ openwrt_ninux_src_dir }}/base.config >> {{ openwrt_src_dir }}/.config
+  changed_when: true
+
+# ccache si attiva SOLO da .config: la variabile d'ambiente CONFIG_CCACHE
+# usata in passato non ha alcun effetto (build #65: cache a 0.0GB e
+# "Stats updated: never" dopo mesi di build da ~30 minuti l'una).
+- name: Abilita ccache nel .config (CONFIG_CCACHE)
+  ansible.builtin.shell: |
+    {
+      echo 'CONFIG_CCACHE=y'
+      echo 'CONFIG_CCACHE_DIR="{{ openwrt_ccache_dir }}"'
+    } >> {{ openwrt_src_dir }}/.config
+  when: _openwrt_use_ccache | default(openwrt_ccache_enabled) | bool
   changed_when: true
 
 - name: Normalizza .config con make defconfig

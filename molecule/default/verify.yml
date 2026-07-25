@@ -1,0 +1,184 @@
+---
+# verify: cosa sarebbe finito davvero nei firmware e sul controller.
+#
+# Le attese qui sotto sono le regole del progetto, scritte una volta sola:
+#   - i config del captive portal e della VPN entrano SOLO nella variante che
+#     li usa (in passato /etc/config/chilli finiva in tutte le immagini);
+#   - mesh e portale li configura OpenWISP con i suoi template: nel firmware
+#     non ci sono uci-defaults di rete ne' i pacchetti autoip;
+#   - sul controller restano solo le ultime 3 versioni, e ricompilare la
+#     stessa versione la sostituisce invece di lasciare online il firmware vecchio.
+
+- name: Verifica firmware simulati e stato del controller
+  hosts: all
+  gather_facts: false
+
+  vars_files:
+    - vars/main.yml
+
+  vars:
+    t_expected:
+      VPN-NONE_CP-nessuno:
+        config_yes: []
+        config_no: ["uspot", "zerotier", "wireguard-tools", "kmod-vxlan", "avahi-autoipd"]
+        overlay_yes: ["etc/config/openwisp", "etc/uci-defaults/99-dnsmasq", "etc/uci-defaults/99-hostname"]
+        overlay_no:
+          - "etc/config/chilli"
+          - "etc/config/uspot"
+          - "etc/config/zerotier"
+          - "etc/uci-defaults/99-zerotier"
+          - "etc/uci-defaults/99-uspot"
+          - "etc/uci-defaults/99-mesh"
+          - "etc/uci-defaults/99-br-cp"
+
+      VPN-WireGuard_CP-uspot:
+        config_yes: ["uspot", "uspot-www", "uspotfilter", "wireguard-tools", "kmod-wireguard", "kmod-vxlan", "vxlan"]
+        config_no: ["zerotier", "avahi-autoipd"]
+        overlay_yes: ["etc/config/uspot", "etc/config/openwisp", "etc/uci-defaults/99-dnsmasq"]
+        overlay_no:
+          - "etc/config/chilli"
+          - "etc/config/zerotier"
+          - "etc/uci-defaults/99-zerotier"
+          - "etc/uci-defaults/99-uspot"
+          - "etc/uci-defaults/99-mesh"
+          - "etc/uci-defaults/99-br-cp"
+
+      VPN-Dual_CP-uspot:
+        config_yes: ["uspot", "zerotier", "wireguard-tools", "kmod-vxlan"]
+        config_no: ["avahi-autoipd"]
+        overlay_yes:
+          - "etc/config/uspot"
+          - "etc/config/zerotier"
+          - "etc/uci-defaults/99-zerotier"
+          - "etc/config/openwisp"
+        overlay_no:
+          - "etc/config/chilli"
+          - "etc/uci-defaults/99-uspot"
+          - "etc/uci-defaults/99-mesh"
+          - "etc/uci-defaults/99-br-cp"
+
+  tasks:
+    # ---- 1. I firmware ------------------------------------------------
+    - name: "Controlla la variante"
+      ansible.builtin.include_tasks: tasks/verify_variant.yml
+      loop: "{{ t_variants }}"
+      loop_control:
+        loop_var: variant
+        label: "{{ variant.key }}"
+
+    # ---- 2. Il controller OpenWISP ------------------------------------
+    - name: Leggi lo stato del controller finto
+      ansible.builtin.uri:
+        url: "{{ t_openwisp_url }}/__state__"
+        method: GET
+      register: _ow
+
+    - name: Estrai versioni OpenWrt rimaste e build cancellate
+      ansible.builtin.set_fact:
+        _ow_versions: "{{ _ow.json.builds | map(attribute='version') | map('split', '-') | map('first') | unique | sort }}"
+        _ow_deleted: "{{ _ow.json.deleted_builds | map(attribute='version') | list }}"
+
+    - name: La retention tiene solo le ultime 3 versioni OpenWrt
+      ansible.builtin.assert:
+        that:
+          - _ow_versions == ["v25.01.1", "v25.12.4", "v25.12.5"]
+        fail_msg: >-
+          Sul controller dovevano restare le ultime 3 versioni
+          (v25.01.1, v25.12.4, v25.12.5), invece ci sono: {{ _ow_versions }}.
+          Attenzione: una retention sbagliata cancella lo storico dei firmware.
+
+    - name: Le build della versione piu' vecchia sono state cancellate
+      ansible.builtin.assert:
+        that:
+          - _ow_deleted | select('search', '^v24\\.10\\.0-') | list | length == 2
+        fail_msg: "Le 2 build v24.10.0 dovevano essere cancellate dalla retention"
+
+    - name: Ricompilare la stessa versione sostituisce la build (niente firmware vecchio online)
+      ansible.builtin.assert:
+        that:
+          - "'v25.12.5-glinet_gl-mt-VPN-NO' in _ow_deleted"
+          - "'v25.12.5-glinet_gl-mt-US-VPN-WG' in _ow_deleted"
+        fail_msg: >-
+          Le build v25.12.5 gia' presenti non sono state sostituite: l'upload di
+          un'immagine duplicata risponde 400 e sul controller resterebbe online
+          il firmware VECCHIO.
+
+    - name: Ogni variante ha una (sola) immagine caricata
+      ansible.builtin.assert:
+        that:
+          - _ow.json.images | selectattr('build_version', 'equalto', item.build_version) | list | length == 1
+        fail_msg: "La build {{ item.build_version }} non ha esattamente 1 immagine caricata"
+      loop: "{{ t_variants }}"
+      loop_control:
+        label: "{{ item.build_version }}"
+
+    - name: Indicizza le immagini caricate per versione build
+      ansible.builtin.set_fact:
+        _img: >-
+          {{
+            dict(_ow.json.images | map(attribute='build_version') | zip(_ow.json.images | map(attribute='markers')))
+          }}
+
+    # Il finto firmware contiene il .config: qui si controlla il contenuto di
+    # cio' che e' stato caricato sul controller, non solo che l'upload sia andato.
+    - name: L'immagine caricata per ogni variante contiene i pacchetti giusti
+      ansible.builtin.assert:
+        that:
+          # NONE: nessun captive portal, nessuna VPN
+          - not _img["v25.12.5-glinet_gl-mt-VPN-NO"].uspot
+          - not _img["v25.12.5-glinet_gl-mt-VPN-NO"].wireguard
+          - not _img["v25.12.5-glinet_gl-mt-VPN-NO"].zerotier
+          # basilicata oggi: uspot + WireGuard con VXLAN, senza ZeroTier
+          - _img["v25.12.5-glinet_gl-mt-US-VPN-WG"].uspot
+          - _img["v25.12.5-glinet_gl-mt-US-VPN-WG"].wireguard
+          - _img["v25.12.5-glinet_gl-mt-US-VPN-WG"].vxlan
+          - not _img["v25.12.5-glinet_gl-mt-US-VPN-WG"].zerotier
+          # Dual + portale: entrambe le VPN e uspot
+          - _img["v25.12.5-glinet_gl-mt-US-VPN-DV"].uspot
+          - _img["v25.12.5-glinet_gl-mt-US-VPN-DV"].zerotier
+          - _img["v25.12.5-glinet_gl-mt-US-VPN-DV"].wireguard
+        fail_msg: "Il firmware caricato su OpenWISP non contiene i pacchetti della sua variante: {{ _img }}"
+
+    - name: I pacchetti autoip non stanno piu' in nessuna immagine (mesh gestita da OpenWISP)
+      ansible.builtin.assert:
+        that:
+          - _ow.json.images | selectattr('markers.autoip') | list | length == 0
+        fail_msg: "avahi-autoipd e' tornato dentro il firmware: la mesh la configura OpenWISP"
+
+    # ---- 3. Controller giu': la build sopravvive -----------------------
+    - name: Leggi la segnalazione degli upload falliti
+      ansible.builtin.slurp:
+        src: "{{ t_work_dir }}/output/.openwisp-upload-failed"
+      register: _failed_marker
+
+    - name: Un controller irraggiungibile lascia traccia ma non fa fallire la build
+      ansible.builtin.assert:
+        that:
+          - (_failed_marker.content | b64decode).splitlines() | length == 1
+          - "'VPN=NONE' in (_failed_marker.content | b64decode)"
+        fail_msg: >-
+          output/.openwisp-upload-failed doveva contenere esattamente la variante
+          che non e' riuscita a caricare, invece contiene:
+          {{ _failed_marker.content | b64decode }}
+
+    - name: Il firmware della variante non caricata e' comunque stato archiviato
+      ansible.builtin.stat:
+        path: >-
+          {{ t_work_dir }}/output/{{ t_version }}/{{ t_org }}/Standard/VPN-NONE/{{ t_target }}/openwrt-ramips-mt76x8-glinet_gl-mt300n-v2-squashfs-sysupgrade.bin
+      register: _offline_fw
+
+    - name: Con OpenWISP giu' il firmware non va perso
+      ansible.builtin.assert:
+        that:
+          - _offline_fw.stat.exists
+        fail_msg: >-
+          Il firmware compilato mentre il controller era irraggiungibile non e'
+          stato archiviato: e' esattamente il modo in cui si buttano via ore di build.
+
+    - name: Riepilogo
+      ansible.builtin.debug:
+        msg:
+          - "Varianti verificate : {{ t_variants | map(attribute='key') | join(', ') }}"
+          - "Build sul controller: {{ _ow.json.builds | length }} ({{ _ow_versions | join(', ') }})"
+          - "Build cancellate    : {{ _ow_deleted | length }}"
+          - "Immagini caricate   : {{ _ow.json.images | length }}"

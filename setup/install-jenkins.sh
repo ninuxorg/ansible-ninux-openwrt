@@ -120,7 +120,7 @@ https://pkg.jenkins.io/debian-stable binary/" \
   systemctl start jenkins
 
   log "Attesa avvio Jenkins..."
-  for i in $(seq 1 12); do
+  for _ in $(seq 1 12); do
     systemctl is-active --quiet jenkins && break
     sleep 5
   done

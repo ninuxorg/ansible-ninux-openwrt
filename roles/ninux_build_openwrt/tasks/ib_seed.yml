@@ -1,0 +1,192 @@
+---
+# tasks/ib_seed.yml - Compila UNA volta il seed e ne estrae l'ImageBuilder
+#
+# Questa e' l'unica compilazione pesante del percorso ImageBuilder: da qui in
+# poi le varianti vengono assemblate da ib_image.yml in un paio di minuti
+# l'una. Il seed e' un superset (tutte le VPN, tutti i motori CP): l'immagine
+# che produce non viene usata, servono solo l'ImageBuilder e il repository di
+# pacchetti che porta con se' (CONFIG_IB_STANDALONE).
+
+# _ib_cache_dir e _ib_seed_ready arrivano da ib_cache_check.yml, eseguito
+# prima di clone_openwrt e feeds proprio per poterli saltare.
+- name: "[IB seed] Riusa l'ImageBuilder in cache"
+  ansible.builtin.debug:
+    msg: >-
+      ImageBuilder gia' presente per {{ openwrt_target }}:
+      {{ _ib_cache_dir }}/imagebuilder — compilazione del seed saltata.
+      Per riforzarla: -e openwrt_ib_force_seed=true
+  when: _ib_seed_ready | bool
+
+- name: "[IB seed] Compila il seed"
+  when: not _ib_seed_ready | bool
+  block:
+    - name: "[IB seed] Componi il .config del seed"
+      ansible.builtin.include_tasks: ib_dotconfig.yml
+
+    - name: "[IB seed] Calcola numero job make"
+      ansible.builtin.set_fact:
+        _make_jobs: >-
+          {{
+            openwrt_make_jobs | int
+            if openwrt_make_jobs | default(0) | int > 0
+            else (ansible_processor_nproc | int + openwrt_make_jobs_extra | default(2) | int)
+          }}
+
+    - name: "[IB seed] Imposta variabili ambiente build"
+      ansible.builtin.set_fact:
+        _openwrt_build_env: >-
+          {{
+            {
+              'CONFIG_CCACHE': 'y',
+              'CCACHE_DIR': openwrt_ccache_dir,
+              'CCACHE_MAXSIZE': openwrt_ccache_maxsize,
+              'CCACHE_COMPILERCHECK': '%compiler% -dumpmachine; %compiler% -dumpversion',
+              'CCACHE_COMPRESS': '1',
+              'CCACHE_SLOPPINESS': 'file_macro,locale,time_macros'
+            } if _openwrt_use_ccache | bool else {}
+          }}
+
+    - name: "[IB seed] Piano"
+      ansible.builtin.debug:
+        msg:
+          - "Target  : {{ openwrt_target }}"
+          - "Seed    : superset — VPN ZeroTier + WireGuard, CP {{ _ib_cp_engines | join(', ') }}"
+          - "Jobs    : {{ _make_jobs }}"
+          - "Cache   : {{ _ib_cache_dir }}"
+
+    - name: "[IB seed] Rimuovi tmp/ esistente per fare spazio al symlink"
+      ansible.builtin.file:
+        path: "{{ openwrt_src_dir }}/tmp"
+        state: absent
+      when: openwrt_tmpfs_enabled | default(true) | bool
+
+    - name: "[IB seed] Crea symlink openwrt/tmp -> tmpfs"
+      ansible.builtin.file:
+        src: "{{ openwrt_tmpfs_path }}"
+        dest: "{{ openwrt_src_dir }}/tmp"
+        state: link
+      when: openwrt_tmpfs_enabled | default(true) | bool
+
+    - name: "[IB seed] Crea directory openwrt/tmp (tmpfs disabilitato)"
+      ansible.builtin.file:
+        path: "{{ openwrt_src_dir }}/tmp"
+        state: directory
+        mode: "0755"
+      when: not (openwrt_tmpfs_enabled | default(true) | bool)
+
+    - name: "[IB seed] Make clean (solo target obbligatori)"
+      ansible.builtin.command:
+        cmd: make clean
+        chdir: "{{ openwrt_src_dir }}"
+      when: _openwrt_clean_build | bool
+      changed_when: true
+
+    - name: "[IB seed] Pulisci bin/ precedente"
+      ansible.builtin.file:
+        path: "{{ openwrt_src_dir }}/bin"
+        state: "{{ item }}"
+        mode: "0755"
+      loop: [absent, directory]
+
+    - name: "[IB seed] Download sorgenti pacchetti"
+      ansible.builtin.command:
+        cmd: "make download -j{{ _make_jobs }}"
+        chdir: "{{ openwrt_src_dir }}"
+      environment: "{{ _openwrt_build_env }}"
+      changed_when: true
+
+    # Stessa strategia di build.yml: un pacchetto non critico che fallisce non
+    # deve buttare via ore di compilazione. Qui pero' il criterio di successo
+    # non e' il firmware ma il tarball dell'ImageBuilder, verificato sotto.
+    - name: "[IB seed] Compila (parallelo, fallback verbose)"
+      ansible.builtin.shell: |
+        make -j{{ _make_jobs }} \
+          || make -j4 V=s \
+          || { echo '=== make fallito: make clean e ultimo tentativo ==='; make clean; make -j{{ _make_jobs }}; }
+      args:
+        chdir: "{{ openwrt_src_dir }}"
+        executable: /bin/bash
+      environment: "{{ _openwrt_build_env }}"
+      changed_when: true
+      ignore_errors: true
+      register: _ib_seed_result
+      async: 7200
+      poll: 30
+
+    - name: "[IB seed] Cerca il tarball dell'ImageBuilder"
+      ansible.builtin.find:
+        paths: "{{ openwrt_src_dir }}/bin/targets"
+        patterns: "openwrt-imagebuilder-*.tar.*"
+        recurse: true
+        file_type: file
+      register: _ib_tarball
+
+    - name: "[IB seed] Fallisci se l'ImageBuilder non e' stato prodotto"
+      ansible.builtin.fail:
+        msg: >
+          Seed fallito: nessun openwrt-imagebuilder-*.tar.* in bin/targets/.
+          Errore make: {{ _ib_seed_result.stderr | default('') | truncate(500) }}
+      when: _ib_tarball.files | length == 0
+
+    - name: "[IB seed] Prepara la directory di cache"
+      ansible.builtin.file:
+        path: "{{ _ib_cache_dir }}/imagebuilder"
+        state: "{{ item }}"
+        mode: "0755"
+      loop: [absent, directory]
+
+    # --strip-components=1: il tarball contiene una directory radice col nome
+    # versionato (openwrt-imagebuilder-<ver>-<board>-<subtarget>.Linux-x86_64),
+    # che renderebbe il percorso dipendente dalla versione.
+    - name: "[IB seed] Estrai l'ImageBuilder in cache"
+      ansible.builtin.command:
+        cmd: >-
+          tar -xf {{ _ib_tarball.files[0].path }}
+          -C {{ _ib_cache_dir }}/imagebuilder --strip-components=1
+      changed_when: true
+
+    # Il .config post-defconfig e' l'elenco autorevole di cosa e' stato davvero
+    # compilato: ib_packages.py lo usa per non passare a `make image` pacchetti
+    # inesistenti (simboli scartati da defconfig, opzioni interne, rinomine).
+    - name: "[IB seed] Salva il .config del seed accanto all'ImageBuilder"
+      ansible.builtin.copy:
+        src: "{{ openwrt_src_dir }}/.config"
+        dest: "{{ _ib_cache_dir }}/seed.config"
+        remote_src: true
+        mode: "0644"
+
+    - name: "[IB seed] Libera bin/ (l'immagine del seed non serve)"
+      ansible.builtin.file:
+        path: "{{ openwrt_src_dir }}/bin"
+        state: "{{ item }}"
+        mode: "0755"
+      loop: [absent, directory]
+
+# L'ImageBuilder standalone non porta il file `repositories`: apk lo cerca
+# (--repositories-file) e a ogni invocazione stampa "failed to read
+# repositories". I pacchetti li prende comunque dal repo locale
+# (--repository packages/packages.adb), ma il rumore nasconde gli errori veri:
+# basta un file vuoto. Fuori dal block: serve anche agli ImageBuilder gia' in
+# cache, estratti prima che questo esistesse.
+- name: "[IB seed] Crea il file repositories vuoto per apk"
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ _ib_cache_dir }}/imagebuilder/repositories"
+    force: false
+    mode: "0644"
+
+- name: "[IB seed] Verifica il profilo richiesto nell'ImageBuilder"
+  ansible.builtin.shell: |
+    set -o pipefail
+    make info 2>/dev/null | sed -n 's/^\([a-zA-Z0-9._-]*\):$/\1/p'
+  args:
+    chdir: "{{ _ib_cache_dir }}/imagebuilder"
+    executable: /bin/bash
+  register: _ib_profiles
+  changed_when: false
+
+- name: "[IB seed] ImageBuilder pronto"
+  ansible.builtin.debug:
+    msg:
+      - "Percorso : {{ _ib_cache_dir }}/imagebuilder"
+      - "Profili  : {{ _ib_profiles.stdout_lines | length }} disponibili"

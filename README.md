@@ -11,14 +11,15 @@ Sistema di build automatizzato per firmware **OpenWrt** per i nodi della rete me
 3. [Installazione Jenkins su Debian Trixie](#installazione-jenkins-su-debian-trixie)
 4. [Configurazione Jenkins](#configurazione-jenkins)
 5. [Configurazione del build](#configurazione-del-build)
-6. [Gestione password con ansible-vault](#gestione-password-con-ansible-vault)
+6. [Gestione segreti con ansible-vault](#gestione-segreti-con-ansible-vault)
 7. [Aggiungere device e organizzazioni](#aggiungere-device-e-organizzazioni)
 8. [Uso da riga di comando](#uso-da-riga-di-comando)
 9. [Performance e ottimizzazioni](#performance-e-ottimizzazioni)
 10. [OpenWISP Firmware Upgrader](#openwisp-firmware-upgrader)
 11. [GitHub Release](#github-release)
 12. [Struttura dei firmware prodotti](#struttura-dei-firmware-prodotti)
-13. [Troubleshooting](#troubleshooting)
+13. [Test e CI](#test-e-ci)
+14. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -32,9 +33,9 @@ ansible-ninux-openwrt/
 │
 ├── config/
 │   ├── base.config                      <- Pacchetti comuni a tutti i target
-│   ├── chilli.ext                       <- Estensione Captive Portal
+│   ├── uspot.ext                        <- Estensione Captive Portal (uspot) — build separata
 │   ├── zerotier.ext                     <- Estensione ZeroTier VPN
-│   ├── wireguard.ext                    <- Estensione WireGuard VPN
+│   ├── wireguard.ext                    <- Estensione WireGuard VPN (include VXLAN)
 │   └── organizations/
 │       └── <org>/
 │           └── <device>.config          <- Config per device
@@ -75,7 +76,7 @@ ansible-ninux-openwrt/
 ```
 
 **Il file principale da modificare è `ninux.yml`** — contiene tutte le variabili di build,
-la configurazione openwisp-config per organizzazione e le password cifrate inline con `ansible-vault encrypt_string`.
+la configurazione openwisp-config per organizzazione e i segreti cifrati inline con `ansible-vault encrypt_string`.
 
 ---
 
@@ -92,14 +93,15 @@ cp ninux.yml.example ninux.yml
 # 3. Modifica org, versione OpenWrt e configurazione openwisp
 nano ninux.yml
 
-# 4. Genera le password cifrate (shared_secret, credenziali OpenWISP)
-#    Vedi sezione "Gestione password con ansible-vault"
+# 4. Genera i segreti cifrati (shared_secret, credenziali OpenWISP)
+#    Vedi sezione "Gestione segreti con ansible-vault"
 
-# 5. Verifica i device disponibili
-ls config/organizations/default/
+# 5. Verifica i device disponibili (default = org di esempio, non compilabile)
+ls config/organizations/basilicata/
 
 # 6. Lancia la build
 ansible-playbook playbooks/build_all.yml \
+  -e openwrt_org=basilicata \
   --vault-password-file /var/lib/jenkins/.vault_pass
 ```
 
@@ -129,7 +131,7 @@ git clone https://github.com/mikysal78/ansible-ninux-openwrt.git
 cd ansible-ninux-openwrt
 sudo ./setup/install-jenkins.sh
 
-# Con vault password per le password openwisp
+# Con vault password per i segreti openwisp
 sudo ./setup/install-jenkins.sh --vault-pass "mia-password-vault"
 
 # Solo dipendenze, Jenkins già installato
@@ -273,22 +275,23 @@ Pipeline e Git sono già inclusi nei plugin suggeriti.
 | Parametro | Default | Descrizione |
 |-----------|---------|-------------|
 | `OPENWRT_ORG` | `default` | Organizzazione Ninux |
-| `OPENWRT_VERSION` | `v25.12.4` | Tag OpenWrt |
-| `VPN_VARIANTS` | `ALL` | `ALL` / `NO` / `ZeroTier` / `WireGuard` / `DualVPN` |
-| `CAPTIVE_PORTAL_VARIANTS` | false | Compila anche varianti con CP |
+| `OPENWRT_VERSION` | `v25.12.5` | Tag OpenWrt |
+| `VPN_VARIANTS` | `ALL` | `ALL` / `NONE` / `ZeroTier` / `WireGuard` / `Dual` |
+| `CAPTIVE_PORTAL_VARIANTS` | true | Compila anche varianti con CP (come `openwrt_cp_variants` in ninux.yml) |
+| `CAPTIVE_PORTAL_ENGINE` | `config` | Motore CP: `config` usa ninux.yml (con eventuali override per org), `uspot` lo forza. Unico motore disponibile |
 | `SKIP_DEPS` | false | Salta `apt install` (dopo il primo run) |
 | `TMPFS_ENABLED` | true | RAM disk per `tmp/` (+30% velocità) |
 | `TMPFS_SIZE` | `8G` | Dimensione tmpfs |
 | `CCACHE_DIR` | `/var/cache/openwrt-ccache` | ccache persistente |
 | `CCACHE_SIZE` | `20G` | Dimensione massima ccache |
-| `OPENWISP_UPLOAD` | false | Upload su OpenWISP Firmware Upgrader |
+| `OPENWISP_UPLOAD` | `config` | Upload su OpenWISP: `config` segue ninux.yml, `on`/`off` forzano |
 | `OPENWISP_TRIGGER_UPGRADE` | false | Avvia batch upgrade OpenWISP |
 | `OPENWISP_URL` | `` | URL istanza OpenWISP Firmware Upgrader |
 
 ### 6. Vault password file
 
 ```bash
-# Sul server Jenkins — necessario per decifrare le password in ninux.yml
+# Sul server Jenkins — necessario per decifrare i segreti in ninux.yml
 echo "mia-password-vault" > /var/lib/jenkins/.vault_pass
 chmod 600 /var/lib/jenkins/.vault_pass
 chown jenkins:jenkins /var/lib/jenkins/.vault_pass
@@ -309,17 +312,24 @@ Sezioni principali:
 
 ```yaml
 # Versione e org
-openwrt_version: "v25.12.4"
+openwrt_version: "v25.12.5"
 openwrt_org: "default"
 
 # Varianti da compilare
-openwrt_vpn_variants: [NO, ZeroTier, WireGuard, DualVPN]
+openwrt_vpn_variants: [NONE, ZeroTier, WireGuard, Dual]
 openwrt_cp_variants: false
+
+# Varianti per organizzazione (vincono sulla lista globale)
+openwrt_org_vpn_variants:
+  basilicata: [NONE, WireGuard]
+
+# Motori Captive Portal: una build separata per ognuno (mai insieme)
+openwrt_cp_engines: [uspot]
 
 # openwisp-config per org (shared_secret cifrata con encrypt_string)
 openwisp_orgs:
   default:
-    controller_url: "https://controller.nnxx.ninux.org"
+    controller_url: "https://openwisp.ninux-nnxx.it"
     management_interface: "owz12345"
     shared_secret: !vault |
           $ANSIBLE_VAULT;1.1;AES256
@@ -333,9 +343,9 @@ openwrt_tmpfs_size: "8G"
 
 ---
 
-## Gestione password con ansible-vault
+## Gestione segreti con ansible-vault
 
-I password (shared_secret openwisp, credenziali Firmware Upgrader) sono cifrati
+I segreti (shared_secret openwisp, credenziali Firmware Upgrader) sono cifrati
 **inline in `ninux.yml`** con `ansible-vault encrypt_string`. Non esiste un vault
 file separato — tutto sta in un file solo, i valori sensibili sono illeggibili
 senza la vault password.
@@ -371,8 +381,8 @@ Output da incollare in `ninux.yml`:
 
 ```yaml
 openwisp_orgs:
-  roma:
-    controller_url: "https://controller.nnxx.ninux.org"
+  esempio:
+    controller_url: "https://openwisp.ninux-nnxx.it"
     management_interface: "owzABCDE"
     shared_secret: !vault |
           $ANSIBLE_VAULT;1.1;AES256
@@ -422,34 +432,105 @@ L'autodiscovery lo includerà automaticamente nella prossima build.
 
 ### Nuova organizzazione
 
+> **L'org `default` è solo un esempio e non è compilabile.** I suoi file
+> (`config/organizations/default/`, `config/root_files/default/`) servono da
+> template da copiare. Una build con `-e openwrt_org=default` si ferma subito
+> con un errore. Le org di esempio sono elencate in `openwrt_example_orgs`
+> (`ninux.yml`). L'org reale attualmente in produzione è `basilicata`.
+
+**1. Directory dei device** — un `.config` per device, il nome del file (senza
+estensione) è il valore di `openwrt_target`. L'autodiscovery li trova da solo:
+
 ```bash
-# 1. Crea directory config device
-mkdir -p config/organizations/roma
+mkdir -p config/organizations/esempio
+cp config/organizations/default/*.config config/organizations/esempio/
+# poi rimuovi i device che l'org non usa
+```
 
-# 2. Aggiungi i .config dei device
-cp config/organizations/default/*.config config/organizations/roma/
+**2. Overlay dei file di sistema** — copiato dentro il firmware così com'è:
 
-# 3. Aggiungi la sezione in ninux.yml
-nano ninux.yml
-# openwisp_orgs:
-#   roma:
-#     controller_url: "https://controller.nnxx.ninux.org"
-#     management_interface: "owzABCDE"
-#     shared_secret: !vault | ...
+```bash
+mkdir -p config/root_files/esempio
+cp -r config/root_files/default/* config/root_files/esempio/
+```
 
-# 4. Genera la shared_secret cifrata
-ansible-vault encrypt_string \
-  --vault-password-file /var/lib/jenkins/.vault_pass \
-  'SecretRomaXyz' --name 'shared_secret'
+Cosa contiene e cosa va adattato:
 
-# 5. Build per la nuova org
+| File | A cosa serve |
+|------|--------------|
+| `etc/uci-defaults/99-hostname` | Prefisso hostname dei nodi |
+| `etc/uci-defaults/99-dnsmasq`  | DNS della mesh e whitelist DNS-rebind (aggiungi i domini dell'org: senza, il controller OpenWISP non si risolve se punta a IP privati) |
+| `etc/config/watchcat`          | Riavvio automatico su perdita connettività |
+| `etc/config/zerotier`          | Config ZeroTier (solo build con VPN ZeroTier/Dual) |
+| `etc/config/openwisp`          | **Non toccare**: se l'org è in `openwisp_orgs` viene rigenerato dalla build |
+
+L'uci-default `99-zerotier` (VPN ZeroTier/Dual) è generato dal template del
+ruolo: non va creato a mano. **Rete mesh e captive portal non stanno nel
+firmware**: bridge `br-cp` e configurazione di uspot arrivano da
+OpenWISP come template, il firmware porta solo i pacchetti e i file di config
+vuoti.
+
+**3. Varianti da compilare** (`ninux.yml`) — opzionale, se l'org non deve
+compilare tutte le varianti VPN globali:
+
+```yaml
+openwrt_org_vpn_variants:
+  esempio:
+    - "NONE"
+    - "WireGuard"     # include VXLAN
+
+# opzionale: motore Captive Portal diverso dal globale
+openwrt_org_cp_engines:
+  esempio:
+    - "uspot"         # unico motore CP disponibile
+```
+
+**4. openwisp-config** (`ninux.yml`) — perché i nodi si registrino al controller.
+Servono la `shared_secret` dell'org su OpenWISP e l'interfaccia di management
+(`wg0` con WireGuard, `owzXXXX` con ZeroTier):
+
+```bash
+ansible-vault encrypt_string --vault-password-file /var/lib/jenkins/.vault_pass \
+  'SECRET_DELL_ORG' --name 'shared_secret'
+ansible-vault encrypt_string --vault-password-file /var/lib/jenkins/.vault_pass \
+  'TOKEN_API_OPENWISP' --name 'api_token'
+```
+
+Incolla i due blocchi cifrati sotto `openwisp_orgs`:
+
+```yaml
+openwisp_orgs:
+  esempio:
+    controller_url: "https://openwisp.ninux-nnxx.it"
+    management_interface: "wg0"
+    shared_secret: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          ...
+    api_token: !vault |          # serve solo per l'upload firmware su OpenWISP
+          $ANSIBLE_VAULT;1.1;AES256
+          ...
+```
+
+Il token API si ottiene dal controller con:
+
+```bash
+curl -s -X POST https://openwisp.ninux-nnxx.it/api/v1/users/token/ \
+  -d "username=UTENTE" -d 'password=PASSWORD'
+```
+
+**5. Build**:
+
+```bash
 ansible-playbook playbooks/build_all.yml \
-  -e openwrt_org=roma \
+  -e openwrt_org=esempio \
   --vault-password-file /var/lib/jenkins/.vault_pass
 ```
 
-> Se un'org non è definita in `openwisp_orgs` o manca la `shared_secret`,
-> la build continua normalmente ma salta la generazione di `/etc/config/openwisp`.
+Su Jenkins basta scrivere `esempio` nel parametro `OPENWRT_ORG`.
+
+> Se l'org non è definita in `openwisp_orgs` o manca la `shared_secret`, la build
+> continua ma salta la generazione di `/etc/config/openwisp`: i nodi non si
+> registrano al controller.
 
 ---
 
@@ -460,14 +541,14 @@ ansible-playbook playbooks/build_all.yml \
 ansible-playbook playbooks/build_all.yml \
   --vault-password-file /var/lib/jenkins/.vault_pass
 
-# Con Captive Portal (2x build per device)
+# Con Captive Portal (2x build per device: senza CP + uspot)
 ansible-playbook playbooks/build_all.yml \
   -e openwrt_cp_variants=true \
   --vault-password-file /var/lib/jenkins/.vault_pass
 
 # Solo alcune varianti VPN
 ansible-playbook playbooks/build_all.yml \
-  -e '{"openwrt_vpn_variants": ["NO", "ZeroTier"]}' \
+  -e '{"openwrt_vpn_variants": ["NONE", "ZeroTier"]}' \
   --vault-password-file /var/lib/jenkins/.vault_pass
 
 # Singolo device, tutte le varianti
@@ -497,10 +578,10 @@ ansible-playbook playbooks/cleanup.yml -e cleanup_output=true # solo output/
 
 ```
 Device 1
-  ├── VPN=NO        ─┐
+  ├── VPN=NONE      ─┐
   ├── VPN=ZeroTier   ├─ parallelo (async, condividono toolchain)
   ├── VPN=WireGuard  │
-  └── VPN=DualVPN   ─┘
+  └── VPN=Dual      ─┘
   → pulizia staging_dir/build_dir
 Device 2
   └── (idem)
@@ -521,6 +602,67 @@ quindi il parallelo è efficiente senza moltiplicare RAM/disco.
 | tmpfs per `tmp/` | **-30%** I/O |
 | 4 varianti in parallelo | **-60%** per device |
 
+### ImageBuilder (sperimentale)
+
+Le varianti dello stesso device differiscono solo per **quali** pacchetti sono
+installati, non per come sono compilati. Ricompilare toolchain, kernel e
+pacchetti a ogni variante è lavoro buttato.
+
+Attivo di default (`openwrt_use_imagebuilder: true`), la build è a due tempi:
+
+```
+Device 1
+  ├── seed  (1 compilazione completa, superset delle varianti)  ~30-60 min
+  │     └── produce openwrt-imagebuilder-*.tar.zst + repo pacchetti
+  └── per ogni variante: make image dall'ImageBuilder            ~1-3 min
+```
+
+Con la matrice attuale di basilicata (2 VPN × 2 CP = 4 varianti/device) si
+passa da 4 compilazioni complete a 1 + 4 assemblaggi.
+
+Da Jenkins: parametro `USE_IMAGEBUILDER`. Da riga di comando:
+
+```bash
+ansible-playbook playbooks/build_all.yml -e openwrt_use_imagebuilder=true
+```
+
+**Un seed per device.** Presuppone che tutti i motori in `openwrt_cp_engines`
+siano compilabili insieme: vale con uspot, unico motore rimasto. Un motore che
+imponesse scelte di compilazione incompatibili (com'era coova-chilli, che
+richiedeva firewall3 + iptables legacy contro firewall4 + nftables)
+richiederebbe di nuovo un seed separato per motore.
+
+**Cache e `openwrt_ib_force_seed`.** Gli ImageBuilder restano in
+`build/imagebuilder/<versione>/<org>/<device>/` e sopravvivono alla pulizia
+post-build, ma **`openwrt_ib_force_seed` è `true` di default**, quindi il seed
+viene comunque ricompilato.
+
+Il motivo: la chiave di cache è `versione/org/device` e non tiene conto del
+*contenuto* della configurazione. Modificando `base.config`, un `.config` di
+device o i feed, una build con la cache attiva riuserebbe un ImageBuilder
+costruito con la configurazione vecchia e produrrebbe firmware con i pacchetti
+sbagliati, senza alcun errore. Dato che si compila di rado e quasi sempre per
+una nuova versione OpenWrt — caso in cui la cache è comunque da rifare — il
+default sicuro vince sul default veloce.
+
+Mettendolo a `false` (Jenkins: `IB_FORCE_SEED` deselezionato) si passa da ore a
+minuti, ma va fatto solo sapendo che nulla di ciò che finisce nel seed è
+cambiato dall'ultima compilazione.
+
+**Composizione delle varianti.** `roles/ninux_build_openwrt/files/ib_packages.py`
+traduce i `.config`/`.ext` del repo nella lista `PACKAGES` per `make image`, così
+la composizione resta definita in un posto solo. Distingue rimozioni esplicite
+(`# CONFIG_PACKAGE_x is not set`: deliberate, sempre applicate) da quelle
+implicite (pacchetti di un'estensione non usata in questa variante), che vengono filtrate contro i pacchetti di default del target
+per non togliere per sbaglio componenti base.
+
+I nomi dei file prodotti sono identici a quelli del percorso normale: release
+GitHub e upload OpenWISP non cambiano.
+
+> Percorso sperimentale, `false` di default. Se un assemblaggio fallisce, il
+> sospetto numero uno è una rimozione implicita che ha tolto una dipendenza:
+> il log mostra la lista `PACKAGES` completa prima di `make image`.
+
 ### Proxmox LXC e tmpfs
 
 ```bash
@@ -539,17 +681,20 @@ In `ninux.yml`:
 
 ```yaml
 openwisp_upload_enabled: true
-openwisp_url: "https://controller.nnxx.ninux.org"
+openwisp_url: "https://openwisp.ninux-nnxx.it"
 openwisp_org_slug: "default"
 openwisp_org_id: !vault |
       $ANSIBLE_VAULT;1.1;AES256
       <UUID cifrato>
 openwisp_trigger_upgrade: false   # true = avvia upgrade automatico
 
+openwisp_replace_build: true      # stessa versione = build sostituita
+openwisp_keep_versions: 3         # versioni OpenWrt da tenere (0 = tieni tutto)
+
 openwisp_orgs:
-  default:
-    controller_url: "https://controller.nnxx.ninux.org"
-    management_interface: "owzXXXXX"
+  basilicata:
+    controller_url: "https://openwisp.ninux-nnxx.it"
+    management_interface: "wg0"
     shared_secret: !vault |
           $ANSIBLE_VAULT;1.1;AES256
           <stringa cifrata>
@@ -557,6 +702,22 @@ openwisp_orgs:
           $ANSIBLE_VAULT;1.1;AES256
           <token API cifrato>
 ```
+
+### Sostituzione e retention
+
+Su OpenWISP c'è una **category per device** (`Ninux Basilicata - x86_64`) e dentro
+una **build per variante** (`v25.12.5-x86_64-VPN-WG`). La versione della build
+contiene la versione OpenWrt, quindi le build si accumulano a ogni nuovo tag.
+
+- **`openwisp_replace_build: true`** — se ricompili la *stessa* versione OpenWrt,
+  la build esistente viene cancellata e ricreata. Serve: riusandola, l'upload
+  dell'immagine risponderebbe `400` (duplicato) e sul controller resterebbe il
+  firmware **vecchio**.
+- **`openwisp_keep_versions: 3`** — dopo l'upload tiene solo le build delle 3
+  versioni OpenWrt più recenti per ogni device, cancellando le più vecchie (le
+  immagini vengono rimosse in cascata). La retention ragiona per *versione*, non
+  per singola build: tutte le varianti VPN/CP della stessa versione restano
+  insieme. `0` disattiva la cancellazione.
 
 ### Flusso
 
@@ -569,6 +730,81 @@ Build → artifacts.yml → openwisp_upload.yml
   5. Carica immagine sysupgrade (type = nome file senza prefisso openwrt-)
   6. (opzionale) Batch upgrade
 ```
+
+Un upload fallito **non** fa fallire la build: la variante finisce in
+`output/.openwisp-upload-failed` con il codice HTTP e la risposta del
+controller, e Jenkins marca la build UNSTABLE (gialla).
+
+### Board non riconosciute dal controller (upload rifiutato con 400)
+
+Il campo `type` dell'immagine deve essere tra quelli che il controller conosce
+(la sua mappa hardware). Se la board manca — o OpenWrt ne ha cambiato il nome
+file — l'upload risponde `400` e il firmware **non viene caricato**: la build
+resta vuota su OpenWISP anche se su Jenkins è tutto verde.
+
+È successo con i device basilicata: dei 6 solo `x86_64` combaciava. Il
+controller conosceva `gl-mt300n-v2` (nome vecchio, oggi `glinet_gl-mt300n-v2`),
+si aspettava `sysupgrade.img` per il Linksys (oggi `.bin`), e non aveva affatto
+TOTOLINK X5000R, TP-Link C2600 e Zyxel NWA50AX Pro.
+
+Si risolve **sul controller**, aggiungendo le board mancanti in
+`settings.py` di OpenWISP:
+
+```python
+OPENWISP_CUSTOM_OPENWRT_IMAGES = (
+    ('ramips-mt76x8-glinet_gl-mt300n-v2-squashfs-sysupgrade.bin', {
+        'label': 'GL.iNet GL-MT300N-V2',
+        'boards': ('GL.iNet GL-MT300N-V2',),
+    }),
+    ('mvebu-cortexa9-linksys_wrt3200acm-squashfs-sysupgrade.bin', {
+        'label': 'Linksys WRT3200ACM',
+        'boards': ('Linksys WRT3200ACM',),
+    }),
+    ('ramips-mt7621-totolink_x5000r-squashfs-sysupgrade.bin', {
+        'label': 'TOTOLINK X5000R',
+        'boards': ('TOTOLINK X5000R',),
+    }),
+    ('ipq806x-generic-tplink_c2600-squashfs-sysupgrade.bin', {
+        'label': 'TP-Link Archer C2600',
+        'boards': ('TP-Link Archer C2600',),
+    }),
+    ('mediatek-filogic-zyxel_nwa50ax-pro-squashfs-sysupgrade.bin', {
+        'label': 'Zyxel NWA50AX Pro',
+        'boards': ('Zyxel NWA50AX Pro',),
+    }),
+)
+```
+
+Poi riavviare OpenWISP. I valori in `boards` devono corrispondere al modello
+riportato dai device registrati (admin → Devices → colonna *Hardware/Board*):
+se un upgrade non parte pur con l'immagine caricata, è quasi sempre questo
+campo che non combacia. Per verificare i `type` accettati dal controller:
+
+```bash
+curl -s -X OPTIONS -H "Authorization: Bearer $TOKEN" \
+  https://openwisp.ninux-nnxx.it/api/v1/firmware-upgrader/build/<build-id>/image/ \
+  | python3 -c "import json,sys; [print(c['value']) for c in json.load(sys.stdin)['actions']['POST']['type']['choices']]"
+```
+
+**Lato repo** il `type` inviato in upload non è più derivato dal nome file, ma
+preso da `openwisp_image_type_map` (`config/build.yml`), che mappa ogni
+`openwrt_target` alla chiave attesa dal controller:
+
+```yaml
+openwisp_image_type_map:
+  glinet_gl-mt300n-v2: "ramips-mt76x8-gl-mt300n-v2-squashfs-sysupgrade.bin"
+  linksys_wrt3200acm: "mvebu-cortexa9-linksys_wrt3200acm-squashfs-sysupgrade.img"
+  x86_64: "x86-64-generic-squashfs-combined-efi.img.gz"
+  totolink_X5000R: "ramips-mt7621-totolink_x5000r-squashfs-sysupgrade.bin"
+  tplink_c2600: "ipq806x-generic-tplink_c2600-squashfs-sysupgrade.bin"
+  zyxel_nwa50ax-pro: "mediatek-filogic-zyxel_nwa50ax-pro-squashfs-sysupgrade.bin"
+```
+
+I primi tre usano le chiavi native di OpenWISP; gli ultimi tre esistono solo
+grazie a `OPENWISP_CUSTOM_OPENWRT_IMAGES` sul controller (playbook `openwisp2`):
+i `type` delle due parti devono restare identici. Un target assente dalla mappa
+viene saltato in upload e annotato in `output/.openwisp-unsupported` (build
+comunque verde).
 
 ---
 
@@ -610,7 +846,7 @@ github_release_include_sha256: true
 
 ### Struttura della release
 
-Ogni release viene creata con tag `<versione>-<org>-build<N>`, es. `v25.12.4-default-build42`.
+Ogni release viene creata con tag `<versione>-<org>-build<N>`, es. `v25.12.5-default-build42`.
 Gli asset vengono caricati con nome che riflette il percorso:
 
 ```
@@ -622,8 +858,15 @@ CaptivePortal_VPN-WireGuard_glinet_gl-mt300n-v2_openwrt-...-squashfs-sysupgrade.
 
 ### Attivazione da Jenkins
 
-Spunta il parametro **`GITHUB_RELEASE`** al lancio del job,
-oppure imposta `github_release_enabled: true` in `ninux.yml` per abilitarlo sempre.
+Imposta `github_release_enabled: true` in `ninux.yml` per abilitarlo sempre,
+oppure usa il parametro **`GITHUB_RELEASE`** al lancio del job: `config` segue
+ninux.yml, `on` e `off` lo forzano.
+
+> `GITHUB_RELEASE` e `OPENWISP_UPLOAD` erano booleani, ma un booleano non sa
+> dire "no": con `github_release_enabled: true` in `ninux.yml` la release
+> partiva comunque, anche a parametro deselezionato. Sono diventati a tre stati
+> per questo — una build di prova pubblicava firmware sul repo pubblico e sul
+> controller credendo di non farlo.
 
 ---
 
@@ -631,16 +874,82 @@ oppure imposta `github_release_enabled: true` in `ninux.yml` per abilitarlo semp
 
 ```
 output/
-└── v25.12.4/
+└── v25.12.5/
     └── default/
         ├── Standard/
-        │   ├── VPN-NO/glinet_gl-mt300n-v2/
+        │   ├── VPN-NONE/glinet_gl-mt300n-v2/
         │   ├── VPN-ZeroTier/glinet_gl-mt300n-v2/
         │   ├── VPN-WireGuard/glinet_gl-mt300n-v2/
-        │   └── VPN-DualVPN/glinet_gl-mt300n-v2/
-        └── CaptivePortal/
+        │   └── VPN-Dual/glinet_gl-mt300n-v2/
+        ├── CaptivePortal-uspot/     <- uspot
+        │   └── VPN-*/...
+        └── CaptivePortal-uspot/     <- uspot (build separata)
             └── VPN-*/...
 ```
+
+---
+
+## Test e CI
+
+Su ogni push e pull request, GitHub Actions (`.github/workflows/ci.yml`) esegue
+lint e test. **La compilazione vera resta su Jenkins**: un firmware OpenWrt da
+sorgenti sono ore di build e decine di GB, fuori dalla portata di un runner
+GitHub (14 GB di disco). Quello che la CI prova è tutto il resto — cioè dove
+sono nati gli errori veri: quali pacchetti finiscono in quale variante, quali
+file di config entrano nell'immagine, e cosa succede sul controller OpenWISP.
+
+### Cosa gira
+
+| Job | Cosa fa |
+|-----|---------|
+| `lint` | `yamllint`, `ansible-lint`, `--syntax-check` di ogni playbook, `shellcheck` sugli uci-defaults e sugli script di setup |
+| `test` | Molecule: esegue il ruolo **per davvero** su un device simulato, poi verifica firmware e controller. Più il controllo che un'org di esempio non sia compilabile |
+
+### Come funziona la simulazione
+
+Il ruolo gira integralmente (overlay, feeds, `.config`, artefatti, upload):
+sono finti solo i due pezzi impossibili da avere in CI.
+
+- **Toolchain OpenWrt** (`molecule/default/files/openwrt-stub/`) — un `Makefile`
+  che non compila niente ma scrive **dentro il finto firmware il `.config`
+  assemblato**. Così i test verificano quali pacchetti sarebbero davvero finiti
+  nell'immagine, senza compilare.
+- **Controller OpenWISP** (`molecule/default/files/mock_openwisp.py`) — un mock
+  in ascolto su `127.0.0.1:8099` che implementa gli endpoint usati dal ruolo e
+  parte già popolato con 4 versioni preesistenti. Riproduce anche il `400` su
+  immagine duplicata, che è il motivo per cui le build vanno sostituite.
+
+Vengono compilate tre varianti di un solo device (`glinet_gl-mt300n-v2`): nessuna
+VPN senza portale, il caso reale di basilicata (**uspot + WireGuard con VXLAN**)
+e **Dual + uspot**. Le regole verificate sono quelle del progetto:
+
+- i config di captive portal e VPN entrano **solo** nella variante che li usa
+  (in passato `/etc/config/chilli` finiva in *tutte* le immagini);
+- nel firmware non ci sono uci-defaults di rete né i pacchetti autoip: mesh e
+  portale li configura OpenWISP con i suoi template;
+- sul controller restano **solo le ultime 3 versioni**, e ricompilare la stessa
+  versione la **sostituisce** invece di lasciare online il firmware vecchio.
+
+L'ultima è la più importante: un errore nella retention cancella lo storico dei
+firmware dal controller. Il test lo intercetta.
+
+### Lanciarli in locale
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements-dev.txt
+
+molecule test        # test completi (~1 minuto, nessun Docker, nessuna rete)
+ansible-lint         # lint dei playbook
+yamllint .
+```
+
+Molecule usa il driver `default`: gira su localhost, non serve Docker. La work
+dir dei test sta nella directory effimera di Molecule, il repo non viene toccato.
+
+Per aggiungere una variante ai test basta aggiungerla a `t_variants` in
+`molecule/default/vars/main.yml` e le attese corrispondenti in
+`molecule/default/verify.yml`.
 
 ---
 

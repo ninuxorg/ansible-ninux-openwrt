@@ -25,6 +25,7 @@
   tasks:
     - name: Mostra spazio occupato prima della pulizia
       ansible.builtin.shell: |
+        set -o pipefail
         echo "=== Spazio build/ ==="
         du -sh {{ openwrt_work_dir }}/build/* 2>/dev/null || echo "  (vuoto)"
         echo "=== Spazio .ccache/ ==="
@@ -32,7 +33,11 @@
         echo "=== Spazio output/ ==="
         du -sh {{ openwrt_work_dir }}/output 2>/dev/null || echo "  (vuoto)"
         echo "=== Totale ==="
-        du -sh {{ openwrt_work_dir }}/build {{ openwrt_work_dir }}/.ccache {{ openwrt_work_dir }}/output 2>/dev/null | tail -1
+        # || true: du esce con 1 se una delle directory manca (es. .ccache/)
+        # e con pipefail farebbe fallire tutta la pulizia
+        du -sh {{ openwrt_work_dir }}/build {{ openwrt_work_dir }}/.ccache {{ openwrt_work_dir }}/output 2>/dev/null | tail -1 || true
+      args:
+        executable: /bin/bash
       register: _before
       changed_when: false
 
@@ -74,7 +79,10 @@
 
     - name: Mostra spazio liberato
       ansible.builtin.shell: |
+        set -o pipefail
         df -h {{ openwrt_work_dir }} | tail -1
+      args:
+        executable: /bin/bash
       register: _after
       changed_when: false
 

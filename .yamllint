@@ -1,0 +1,24 @@
+---
+# Configurazione yamllint (usata dalla CI GitHub e in locale: yamllint .)
+extends: default
+
+rules:
+  # I task Ansible con Jinja lunghi superano spesso gli 80 caratteri:
+  # 160 e' un limite che tiene a bada le righe davvero illeggibili
+  # senza costringere a spezzare ogni espressione.
+  line-length:
+    max: 160
+    level: warning
+  comments:
+    min-spaces-from-content: 1
+  braces:
+    max-spaces-inside: 1
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false
+
+ignore: |
+  build/
+  output/
+  .ccache/
+  .github/

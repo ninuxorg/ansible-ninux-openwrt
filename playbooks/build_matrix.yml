@@ -7,18 +7,18 @@
 # Example matrix (group_vars/build_hosts.yml):
 #
 #   openwrt_build_matrix:
-#     - org: default
+#     - org: basilicata
 #       target: glinet_gl-mt300n-v2
 #       captive_portal: true
-#       vpn: ZeroTier
-#     - org: default
+#       vpn: WireGuard
+#     - org: basilicata
 #       target: x86_64
 #       captive_portal: false
-#       vpn: WireGuard
-#     - org: roma
+#       vpn: NONE
+#     - org: esempio
 #       target: zyxel_nwa50ax-pro
 #       captive_portal: false
-#       vpn: NO
+#       vpn: NONE
 
 - name: Build Ninux OpenWrt firmware matrix
   hosts: build_hosts
@@ -40,7 +40,7 @@
         openwrt_org: "{{ item.org }}"
         openwrt_target: "{{ item.target }}"
         openwrt_captive_portal: "{{ item.captive_portal | default(false) }}"
-        openwrt_vpn: "{{ item.vpn | default('NO') }}"
+        openwrt_vpn: "{{ item.vpn | default('NONE') }}"
       loop: "{{ openwrt_build_matrix }}"
       loop_control:
         label: "{{ item.org }}/{{ item.target }} CP={{ item.captive_portal | default(false) }} VPN={{ item.vpn | default('NO') }}"

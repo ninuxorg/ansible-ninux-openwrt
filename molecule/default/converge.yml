@@ -1,0 +1,27 @@
+---
+# converge: esegue il ruolo VERO, una volta per variante, sul device finto.
+# Girano davvero rootfiles.yml, feeds.yml, dotconfig.yml, build.yml,
+# artifacts.yml e openwisp_upload.yml: solo make e OpenWrt sono stub.
+
+- name: Compila le varianti di un device (toolchain simulata)
+  hosts: all
+  gather_facts: true
+
+  vars_files:
+    - vars/main.yml
+
+  tasks:
+    - name: "Variante {{ variant.vpn }} / CP {{ variant.engine if variant.cp else 'nessuno' }}"
+      ansible.builtin.include_tasks: tasks/build_variant.yml
+      loop: "{{ t_variants }}"
+      loop_control:
+        loop_var: variant
+        label: "VPN={{ variant.vpn }} CP={{ variant.engine if variant.cp else 'NO' }}"
+
+    # Per ultima: la stessa build con il controller OpenWISP irraggiungibile.
+    # Se questo task fa fallire il play, la regressione e' grave: significa che
+    # un controller giu' butta via ore di compilazione (vedi build Jenkins #57).
+    - name: "Variante con controller OpenWISP irraggiungibile"
+      ansible.builtin.include_tasks: tasks/build_variant.yml
+      vars:
+        variant: "{{ t_offline_variant }}"

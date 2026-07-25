@@ -22,10 +22,10 @@
   vars:
     openwrt_work_dir: "{{ playbook_dir }}/.."
     openwrt_vpn_variants:
-      - "NO"
+      - "NONE"
       - "ZeroTier"
       - "WireGuard"
-      - "DualVPN"
+      - "Dual"
     openwrt_cp_variants: false
     parallel_builds: 2   # device in parallelo
 
@@ -67,8 +67,11 @@
   tasks:
     # Fase 1: per ogni device, compila tutte le varianti VPN/CP in sequenza
     # I device vengono lanciati in parallelo (async) a gruppi di parallel_builds
+    # set -o pipefail: senza, il rc del task e' quello di `tee` (sempre 0) e una
+    # build fallita verrebbe riportata come OK dal riepilogo qui sotto.
     - name: Lancia build per device {{ item }}
       ansible.builtin.shell: |
+        set -o pipefail
         ansible-playbook {{ playbook_dir }}/build_firmware.yml \
           -e openwrt_org={{ openwrt_org }} \
           -e openwrt_target={{ item }} \
@@ -78,6 +81,8 @@
           {{ '-e openwrt_cp_variants=true' if openwrt_cp_variants | bool else '' }} \
           --skip-tags deps \
           2>&1 | tee {{ openwrt_work_dir }}/build/log-{{ item }}.log
+      args:
+        executable: /bin/bash
       loop: "{{ _discovered_targets }}"
       loop_control:
         label: "{{ item }}"

@@ -14,22 +14,33 @@
 # OPENWRT - Versione e organizzazione
 # -----------------------------------------------------------------------------
 
-# Tag OpenWrt da compilare (es. v25.12.4, v24.10.0)
-openwrt_version: "v25.12.4"
+# Tag OpenWrt da compilare (es. v25.12.5, v24.10.0)
+openwrt_version: "v25.12.5"
 
 # Organizzazione Ninux - corrisponde a config/organizations/<org>/
-openwrt_org: "default"
+openwrt_org: "basilicata"
+
+# Org di solo esempio: non compilabili (i loro file servono da template).
+# Una build su queste org fallisce subito con un messaggio esplicativo.
+openwrt_example_orgs:
+  - "default"
 
 # Varianti VPN da compilare per ogni device
-# Possibili valori: NO, ZeroTier, WireGuard, DualVPN
+# Possibili valori: NONE, ZeroTier, WireGuard, Dual
 openwrt_vpn_variants:
-  - "NO"
+  - "NONE"
   - "ZeroTier"
   - "WireGuard"
-  - "DualVPN"
+  - "Dual"
 
-# Compila anche le varianti con Captive Portal (raddoppia le build)
+# Compila anche le varianti con Captive Portal (una build in più per motore CP)
 openwrt_cp_variants: true
+
+# Motori Captive Portal — una build separata per ognuno.
+# Oggi ne esiste uno solo (uspot); la lista resta perche' la matrice di
+# build e i nomi degli artefatti sono gia' parametrici sul motore.
+openwrt_cp_engines:
+  - "uspot"
 
 # -----------------------------------------------------------------------------
 # PERCORSI
@@ -81,6 +92,51 @@ openwrt_ccache_dir: "/var/cache/openwrt-ccache"
 openwrt_ccache_maxsize: "20G"
 
 # -----------------------------------------------------------------------------
+# PERFORMANCE - ImageBuilder
+#
+# Percorso normale: ogni variante (device x VPN x Captive Portal) e' una
+# compilazione completa da sorgente. Le varianti dello stesso device pero'
+# differiscono solo per QUALI pacchetti sono installati, non per come sono
+# compilati: ricompilare toolchain, kernel e pacchetti ogni volta e' lavoro
+# buttato.
+#
+# Percorso ImageBuilder: per ogni device si compila UNA volta un "seed" che e'
+# il superset delle varianti (tutte le VPN, tutti i motori CP). Il seed produce
+# un ImageBuilder standalone con dentro tutti i pacchetti compilati (base.config
+# ha gia' CONFIG_IB=y e CONFIG_IB_STANDALONE=y). Le varianti vengono poi
+# assemblate da quell'ImageBuilder in un paio di minuti l'una.
+#
+# Con l'attuale matrice basilicata (2 VPN x 2 CP = 4 varianti/device) si passa
+# da 4 compilazioni complete a 1 + 4 assemblaggi.
+#
+# I nomi dei file prodotti sono identici a quelli del percorso normale:
+# release GitHub e upload OpenWISP non cambiano.
+openwrt_use_imagebuilder: true
+
+# Dove conservare gli ImageBuilder estratti, per versione/org/device/gruppo.
+# Sopravvive tra le build: un device gia' "seedato" riparte dagli assemblaggi.
+openwrt_ib_cache_dir: "{{ openwrt_build_basedir }}/imagebuilder"
+
+# Ricompila il seed anche se in cache.
+#
+# Attivo di default. La chiave di cache e' versione/org/device e NON tiene conto
+# del contenuto della configurazione: un base.config modificato riuserebbe un
+# ImageBuilder costruito con quella vecchia, producendo firmware con i pacchetti
+# sbagliati e senza segnalare niente. Si compila di rado e quasi sempre per una
+# nuova versione OpenWrt, quindi la cache sarebbe comunque da rifare: meglio
+# pagare le ore ed essere certi che il firmware corrisponda alla configurazione.
+#
+# Metterlo a false fa risparmiare ore, ma solo sapendo che nulla di cio' che
+# finisce nel seed e' cambiato dall'ultima compilazione.
+openwrt_ib_force_seed: true
+
+# NB: un solo seed per device presuppone che tutti i motori in
+# openwrt_cp_engines siano compilabili insieme. Vale con uspot, unico motore
+# rimasto. Un motore che imponga scelte di compilazione incompatibili (com'era
+# coova-chilli, che richiedeva firewall3 + iptables legacy contro firewall4 +
+# nftables) richiederebbe di nuovo un seed separato per motore.
+
+# -----------------------------------------------------------------------------
 # PERFORMANCE - tmpfs (RAM disk per directory temporanee build)
 # -----------------------------------------------------------------------------
 
@@ -116,7 +172,6 @@ openwrt_clean_build_targets:
 # -----------------------------------------------------------------------------
 
 openwrt_feeds:
-  - "src-git chilli https://github.com/mikysal78/coova-chilli-openwrt.git"
   - "src-git openwisp_config https://github.com/openwisp/openwisp-config.git"
   - "src-git openwisp_monitoring https://github.com/openwisp/openwrt-openwisp-monitoring.git"
   - "src-git zerotier https://github.com/mwarning/zerotier-openwrt.git"
@@ -144,12 +199,49 @@ openwisp_org_id: ""
 # Nome della category firmware in OpenWISP (creata se non esiste)
 openwisp_category_name: "Ninux {{ openwrt_org | capitalize }} - {{ openwrt_target }}"
 
+# Un upload fallito non fa fallire la build (il firmware resta archiviato):
+# la variante non caricata finisce in output/.openwisp-upload-failed e Jenkins
+# marca la build UNSTABLE. true = fallisce tutta la pipeline, come prima.
+openwisp_upload_fatal: false
+
+# Sostituisci la build se la versione esiste gia' su OpenWISP
+openwisp_replace_build: true
+
+# Retention: versioni OpenWrt da tenere per device (0 = disattivata)
+openwisp_keep_versions: 3
+
 # Avvia batch upgrade su tutti i device dopo l'upload
 openwisp_trigger_upgrade: false
 
 # Limita upgrade a un device group specifico (UUID OpenWISP)
 # Lascia vuoto per aggiornare tutti i device dell'org
 openwisp_upgrade_group: ""
+
+# Mappa target OpenWrt -> "type" immagine atteso da OpenWISP.
+#
+# OpenWISP NON abbina il device al firmware guardando il nome del file caricato,
+# ma il campo `type` che passiamo in upload: deve coincidere ESATTAMENTE con una
+# chiave della hardware map ufficiale di OpenWISP (OPENWRT_FIRMWARE_IMAGE_MAP in
+# openwisp_firmware_upgrader/hardware.py). Se il type non è tra quelli noti, il
+# controller risponde 400 e il firmware non viene mai memorizzato.
+#
+# I nomi qui NON seguono il nome file prodotto da OpenWrt (che include versione e
+# nome profilo moderno, es. "openwrt-25.12.5-ramips-mt76x8-glinet_gl-mt300n-v2-..."):
+# usano lo schema storico della mappa OpenWISP (niente versione, profilo legacy).
+#
+# Un target NON presente in questa mappa viene saltato in upload e annotato in
+# output/.openwisp-unsupported (la build prosegue). Per caricarlo comunque, aggiungi
+# la sua voce qui E configura OPENWISP_CUSTOM_OPENWRT_IMAGES sul controller.
+openwisp_image_type_map:
+  glinet_gl-mt300n-v2: "ramips-mt76x8-gl-mt300n-v2-squashfs-sysupgrade.bin"
+  linksys_wrt3200acm: "mvebu-cortexa9-linksys_wrt3200acm-squashfs-sysupgrade.img"
+  x86_64: "x86-64-generic-squashfs-combined-efi.img.gz"
+  # Non presenti nella hardware map UFFICIALE di OpenWISP: abilitati tramite
+  # OPENWISP_CUSTOM_OPENWRT_IMAGES sul controller (playbook openwisp2). I `type`
+  # qui devono restare identici a quelli dichiarati là, altrimenti l'upload dà 400.
+  totolink_X5000R: "ramips-mt7621-totolink_x5000r-squashfs-sysupgrade.bin"
+  tplink_c2600: "ipq806x-generic-tplink_c2600-squashfs-sysupgrade.bin"
+  zyxel_nwa50ax-pro: "mediatek-filogic-zyxel_nwa50ax-pro-squashfs-sysupgrade.bin"
 
 # -----------------------------------------------------------------------------
 # OPENWISP-CONFIG (agente sul firmware)
@@ -193,3 +285,5 @@ openwrt_build_deps:
   - liblzma-dev
   - libpam0g-dev
   - cpio
+  # scompattare il tarball dell'ImageBuilder (.tar.zst)
+  - zstd

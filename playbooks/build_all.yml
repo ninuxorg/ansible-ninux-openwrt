@@ -16,6 +16,24 @@
           - openwrt_org is defined and openwrt_org | length > 0
         fail_msg: "Definisci openwrt_org in ninux.yml o con -e openwrt_org=xxx"
 
+    - name: Rifiuta le org di solo esempio
+      ansible.builtin.assert:
+        that:
+          - openwrt_org not in (openwrt_example_orgs | default([]))
+        fail_msg: >-
+          L'org '{{ openwrt_org }}' e' solo un esempio e non va compilata:
+          i suoi file (config/organizations/{{ openwrt_org }}/,
+          config/root_files/{{ openwrt_org }}/) servono da template.
+          Usa un'org reale, es. -e openwrt_org=basilicata, oppure creane una nuova
+          (vedi README, sezione "Aggiungere device e organizzazioni").
+
+    # La workspace Jenkins sopravvive tra un job e l'altro: senza questo, un
+    # upload fallito una volta marcherebbe UNSTABLE anche le build successive.
+    - name: Azzera la segnalazione degli upload OpenWISP falliti
+      ansible.builtin.file:
+        path: "{{ openwrt_output_dir }}/.openwisp-upload-failed"
+        state: absent
+
     - name: Scopri device disponibili per org
       ansible.builtin.find:
         paths: "{{ openwrt_work_dir }}/config/organizations/{{ openwrt_org }}"
@@ -37,16 +55,47 @@
              | map('regex_replace', '\.config$', '')
              | sort | list }}
 
+    # Filtro opzionale: compila solo un sottoinsieme di device (es. per test).
+    # Passato da Jenkins col parametro DEVICES -> -e openwrt_only_targets=[...].
+    - name: Filtra i device se openwrt_only_targets è definito
+      ansible.builtin.set_fact:
+        _discovered_targets: >-
+          {{ _discovered_targets | select('in', openwrt_only_targets) | list }}
+      when: openwrt_only_targets | default([]) | length > 0
+
+    - name: Fallisci se il filtro device non matcha nulla
+      ansible.builtin.fail:
+        msg: >-
+          openwrt_only_targets={{ openwrt_only_targets }} non matcha nessun
+          .config in config/organizations/{{ openwrt_org }}/
+      when:
+        - openwrt_only_targets | default([]) | length > 0
+        - _discovered_targets | length == 0
+
+    - name: Calcola dimensione Captive Portal (none + un motore per build)
+      ansible.builtin.set_fact:
+        _cp_engines_org: >-
+          {{ (openwrt_org_cp_engines | default({}))[openwrt_org] | default(openwrt_cp_engines) }}
+
+    - name: Costruisci dimensione CP
+      ansible.builtin.set_fact:
+        _cp_dim: >-
+          {{
+            (['none'] + _cp_engines_org) if openwrt_cp_variants | bool
+            else ([_cp_engines_org[0]] if openwrt_captive_portal | default(false) | bool else ['none'])
+          }}
+
     - name: Costruisci lista varianti (VPN x CP)
       ansible.builtin.set_fact:
         _variant_matrix: >-
           {{
-            _variant_matrix | default([]) + [{'vpn': item.0, 'cp': item.1}]
+            _variant_matrix | default([]) +
+            [{'vpn': item.0, 'cp': item.1 != 'none', 'engine': item.1}]
           }}
       loop: >-
         {{
-          openwrt_vpn_variants
-          | product([false, true] if openwrt_cp_variants | bool else [openwrt_captive_portal | default(false) | bool])
+          (openwrt_org_vpn_variants | default({}))[openwrt_org] | default(openwrt_vpn_variants)
+          | product(_cp_dim)
           | list
         }}
       loop_control:
@@ -61,7 +110,9 @@
           Device         : {{ _discovered_targets | join(', ') }}
           Varianti/device: {{ _variant_matrix | length }}
           Totale firmware: {{ _discovered_targets | length * _variant_matrix | length }}
-          Strategia      : 1 device per volta, {{ _variant_matrix | length }} varianti in parallelo
+          Strategia      : {{ 'ImageBuilder — 1 seed per device, poi assemblaggio delle varianti'
+                              if openwrt_use_imagebuilder | bool
+                              else '1 device per volta, ' ~ _variant_matrix | length ~ ' varianti in parallelo' }}
           Jobs make      : {{ ansible_processor_nproc | int + openwrt_make_jobs_extra | default(2) | int }}
           ccache         : {{ openwrt_ccache_dir }} ({{ openwrt_ccache_maxsize }})
           tmpfs          : {{ openwrt_tmpfs_enabled }} ({{ openwrt_tmpfs_size }})
@@ -69,21 +120,31 @@
           {% for t in _discovered_targets %}
           Device {{ loop.index }}: {{ t }}
           {% for v in _variant_matrix %}
-            → VPN={{ v.vpn }} CP={{ v.cp }}
+            → VPN={{ v.vpn }} CP={{ v.engine if v.cp else 'NO' }}
           {% endfor %}
           {% endfor %}
 
   tasks:
-    - name: "Build device per device"
+    - name: "Build device per device (compilazione completa per variante)"
       ansible.builtin.include_tasks: _build_device_variants.yml
       loop: "{{ _discovered_targets }}"
       loop_control:
         loop_var: target_item
         label: "{{ target_item }}"
+      when: not openwrt_use_imagebuilder | bool
+
+    - name: "Build device per device (ImageBuilder)"
+      ansible.builtin.include_tasks: _build_device_variants_ib.yml
+      loop: "{{ _discovered_targets }}"
+      loop_control:
+        loop_var: target_item
+        label: "{{ target_item }}"
+      when: openwrt_use_imagebuilder | bool
 
   post_tasks:
     - name: Pulizia finale
       ansible.builtin.shell: |
+        set -o pipefail
         echo "=== Spazio prima della pulizia ==="
         df -h {{ openwrt_work_dir }} | tail -1
         du -sh {{ openwrt_work_dir }}/build 2>/dev/null || true
@@ -125,16 +186,19 @@
       changed_when: false
       when: openwrt_ccache_enabled | bool
 
-    - name: ccache stats
+    - name: Statistiche ccache
       ansible.builtin.debug:
         msg: "{{ _ccache_final.stdout_lines }}"
       when: openwrt_ccache_enabled | bool
 
     - name: Riepilogo firmware prodotti
       ansible.builtin.shell: |
+        set -o pipefail
         find {{ openwrt_output_dir }} -type f \
           \( -name "*-sysupgrade*" -o -name "*-factory*" -o -name "*.img.gz" \) \
           | sort
+      args:
+        executable: /bin/bash
       register: _firmware_list
       changed_when: false
 

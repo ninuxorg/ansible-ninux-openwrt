@@ -1,0 +1,171 @@
+---
+# tasks/ib_image.yml - Assembla UNA variante con l'ImageBuilder del seed
+#
+# Nessuna compilazione: si installano nel rootfs pacchetti gia' presenti nel
+# repository dell'ImageBuilder. Ordine di grandezza: minuti invece di ore.
+#
+# L'overlay (root_files) lo ha gia' preparato rootfiles.yml in
+# {{ openwrt_src_dir }}/files ed e' specifico di questa variante.
+
+# _ib_cache_dir arriva da ib_cache_check.yml
+- name: "[IB image] Calcola percorsi"
+  ansible.builtin.set_fact:
+    _ib_bin_dir: "{{ openwrt_src_dir }}/bin/targets/ib/{{ openwrt_target }}"
+    # Azzerati a ogni variante: set_fact persiste sull'host e senza reset le
+    # liste si accumulerebbero da una variante all'altra.
+    _ib_add_files: []
+    _ib_del_files: []
+
+- name: "[IB image] Verifica che l'ImageBuilder esista"
+  ansible.builtin.stat:
+    path: "{{ _ib_cache_dir }}/imagebuilder/Makefile"
+  register: _ib_present
+
+- name: "[IB image] Fallisci se manca l'ImageBuilder"
+  ansible.builtin.fail:
+    msg: >
+      ImageBuilder assente in {{ _ib_cache_dir }}/imagebuilder:
+      il seed di {{ openwrt_target }} non e' stato compilato.
+  when: not _ib_present.stat.exists
+
+# -----------------------------------------------------------------------------
+# Composizione della variante
+#
+# Il seed e' un superset: contiene tutte le VPN e tutti i motori CP.
+# Le estensioni NON volute qui vanno negate esplicitamente, altrimenti i loro
+# pacchetti resterebbero installati.
+# -----------------------------------------------------------------------------
+
+- name: "[IB image] Estensioni applicabili a questa variante"
+  ansible.builtin.set_fact:
+    _ib_ext_add: >-
+      {{
+        ([openwrt_cp_engine] if openwrt_captive_portal | bool else [])
+        + (['zerotier'] if _vpn in ['ZeroTier', 'Dual'] else [])
+        + (['wireguard'] if _vpn in ['WireGuard', 'Dual'] else [])
+      }}
+    _ib_ext_seed: "{{ _ib_cp_engines + ['zerotier', 'wireguard'] }}"
+
+- name: "[IB image] Estensioni da negare (presenti nel seed, non in questa variante)"
+  ansible.builtin.set_fact:
+    _ib_ext_del: "{{ _ib_ext_seed | difference(_ib_ext_add) }}"
+
+- name: "[IB image] Percorsi delle estensioni da installare"
+  ansible.builtin.set_fact:
+    _ib_add_files: "{{ _ib_add_files + [openwrt_ninux_src_dir ~ '/' ~ item ~ '.ext'] }}"
+  loop: "{{ _ib_ext_add }}"
+
+- name: "[IB image] Percorsi delle estensioni da rimuovere"
+  ansible.builtin.set_fact:
+    _ib_del_files: "{{ _ib_del_files + [openwrt_ninux_src_dir ~ '/' ~ item ~ '.ext'] }}"
+  loop: "{{ _ib_ext_del }}"
+
+- name: "[IB image] Installa lo script di calcolo pacchetti"
+  ansible.builtin.copy:
+    src: ib_packages.py
+    dest: "{{ openwrt_build_basedir }}/ib_packages.py"
+    mode: "0755"
+
+- name: "[IB image] Ricava il profilo device dal .config del target"
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      sed -n 's/^CONFIG_TARGET_[a-z0-9_]*_DEVICE_\(.*\)=y$/\1/p' \
+        {{ openwrt_ninux_src_dir }}/organizations/{{ openwrt_org }}/{{ openwrt_target }}.config \
+        | head -1
+    executable: /bin/bash
+  register: _ib_profile_raw
+  changed_when: false
+
+- name: "[IB image] Fallisci se il profilo non e' determinabile"
+  ansible.builtin.fail:
+    msg: >
+      Nessun CONFIG_TARGET_*_DEVICE_*=y in
+      config/organizations/{{ openwrt_org }}/{{ openwrt_target }}.config:
+      l'ImageBuilder ha bisogno del profilo device.
+  when: _ib_profile_raw.stdout | trim | length == 0
+
+# I pacchetti di default del target servono a NON rimuovere per sbaglio roba
+# come firewall4 o uhttpd, che le estensioni elencano come dipendenza ma che
+# fanno parte della base OpenWrt (vedi ib_packages.py).
+- name: "[IB image] Raccogli i pacchetti di default dell'ImageBuilder"
+  ansible.builtin.shell:
+    cmd: make info > {{ _ib_cache_dir }}/info.txt
+    chdir: "{{ _ib_cache_dir }}/imagebuilder"
+  changed_when: false
+
+- name: "[IB image] Calcola la lista PACKAGES"
+  ansible.builtin.command:
+    argv: >-
+      {{
+        [
+          'python3', openwrt_build_basedir ~ '/ib_packages.py',
+          '--seed', _ib_cache_dir ~ '/seed.config',
+          '--info', _ib_cache_dir ~ '/info.txt',
+          '--profile', _ib_profile_raw.stdout | trim,
+          '--add',
+          openwrt_ninux_src_dir ~ '/base.config',
+          openwrt_ninux_src_dir ~ '/organizations/' ~ openwrt_org ~ '/' ~ openwrt_target ~ '.config'
+        ]
+        + _ib_add_files
+        + (['--del'] + _ib_del_files if _ib_del_files | length > 0 else [])
+      }}
+  register: _ib_packages
+  changed_when: false
+
+- name: "[IB image] Piano"
+  ansible.builtin.debug:
+    msg:
+      - "Target   : {{ openwrt_target }}"
+      - "Profilo  : {{ _ib_profile_raw.stdout | trim }}"
+      - "VPN      : {{ _vpn }}"
+      - "CP       : {{ openwrt_cp_engine if openwrt_captive_portal | bool else 'NO' }}"
+      - "Rimossi  : {{ _ib_ext_del | join(', ') | default('nessuno', true) }}"
+      - "PACKAGES : {{ _ib_packages.stdout | trim }}"
+
+# Il rootfs lo azzera gia' l'ImageBuilder (_call_image fa rm -rf TARGET_DIR),
+# ma BIN_DIR no: senza questo le immagini della variante precedente restano li'
+# e verrebbero raccolte come se fossero di questa.
+#
+# NB: non usare `make clean`, che cancella anche tmp/ e dl/ dell'ImageBuilder
+# (vedi target clean nel suo Makefile) lasciandolo a lamentarsi di TMPDIR.
+- name: "[IB image] Rimuovi le immagini della variante precedente"
+  ansible.builtin.file:
+    path: "{{ _ib_bin_dir }}"
+    state: absent
+
+- name: "[IB image] Assembla l'immagine"
+  ansible.builtin.command:
+    argv:
+      - make
+      - image
+      - "PROFILE={{ _ib_profile_raw.stdout | trim }}"
+      - "PACKAGES={{ _ib_packages.stdout | trim }}"
+      - "FILES={{ openwrt_src_dir }}/files"
+      - "BIN_DIR={{ _ib_bin_dir }}"
+    chdir: "{{ _ib_cache_dir }}/imagebuilder"
+  changed_when: true
+  register: _ib_make
+
+- name: "[IB image] Verifica le immagini prodotte"
+  ansible.builtin.find:
+    paths: "{{ _ib_bin_dir }}"
+    patterns:
+      - "*-sysupgrade.bin"
+      - "*-factory.bin"
+      - "*.img.gz"
+      - "*.img"
+    recurse: true
+    file_type: file
+  register: _ib_images
+
+- name: "[IB image] Fallisci se non e' stata prodotta alcuna immagine"
+  ansible.builtin.fail:
+    msg: >
+      L'ImageBuilder non ha prodotto immagini in {{ _ib_bin_dir }}.
+      Output: {{ _ib_make.stdout | default('') | truncate(800) }}
+  when: _ib_images.files | length == 0
+
+- name: "[IB image] Immagini prodotte"
+  ansible.builtin.debug:
+    msg: "{{ _ib_images.files | map(attribute='path') | map('basename') | list }}"

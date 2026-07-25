@@ -1,0 +1,48 @@
+---
+# playbooks/_build_device_variants_ib.yml
+# Incluso da build_all.yml quando openwrt_use_imagebuilder: true.
+#
+# Equivalente di _build_device_variants.yml, ma in due tempi:
+#   1. un seed per device (la sola compilazione pesante)
+#   2. un assemblaggio per variante, dall'ImageBuilder del seed
+
+- name: "[ {{ target_item }} ] Piano ImageBuilder"
+  ansible.builtin.debug:
+    msg: >-
+      1 seed da compilare, poi {{ _variant_matrix | length }} varianti
+      da assemblare.
+
+- name: "Compila il seed e produci l'ImageBuilder"
+  ansible.builtin.include_role:
+    name: ninux_build_openwrt
+  vars:
+    openwrt_role_mode: "ib-seed"
+    openwrt_target: "{{ target_item }}"
+    openwrt_cleanup_after_build: false
+
+- name: "Assembla variante dall'ImageBuilder"
+  ansible.builtin.include_role:
+    name: ninux_build_openwrt
+  vars:
+    openwrt_role_mode: "ib-image"
+    openwrt_target: "{{ target_item }}"
+    openwrt_vpn: "{{ variant_item.vpn }}"
+    openwrt_captive_portal: "{{ variant_item.cp }}"
+    openwrt_cp_engine: "{{ variant_item.engine | default('uspot') }}"
+    openwrt_cleanup_after_build: false
+  loop: "{{ _variant_matrix }}"
+  loop_control:
+    loop_var: variant_item
+    label: "{{ target_item }} VPN={{ variant_item.vpn }} CP={{ variant_item.engine if variant_item.cp else 'NO' }}"
+
+# staging_dir/build_dir sono del solo seed: gli ImageBuilder stanno in
+# openwrt_ib_cache_dir (fuori da build/openwrt) e sopravvivono, cosi' una
+# build successiva sullo stesso device riparte dai soli assemblaggi.
+- name: "[ {{ target_item }} ] Pulizia post-device"
+  ansible.builtin.shell: |
+    rm -rf {{ openwrt_work_dir }}/build/openwrt/staging_dir
+    rm -rf {{ openwrt_work_dir }}/build/openwrt/build_dir
+    rm -rf {{ openwrt_work_dir }}/build/openwrt/bin
+  args:
+    executable: /bin/bash
+  changed_when: true

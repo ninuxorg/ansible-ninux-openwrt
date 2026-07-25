@@ -4,23 +4,43 @@ pipeline {
     parameters {
         string(
             name: 'OPENWRT_ORG',
-            defaultValue: 'default',
-            description: 'Organizzazione Ninux'
+            defaultValue: 'basilicata',
+            description: 'Organizzazione Ninux (default = org di esempio, non compilabile)'
         )
         string(
             name: 'OPENWRT_VERSION',
-            defaultValue: 'v25.12.4',
+            defaultValue: 'v25.12.5',
             description: 'Tag OpenWrt'
+        )
+        string(
+            name: 'DEVICES',
+            defaultValue: '',
+            description: 'Sottoinsieme device da compilare (comma-separated, es. "totolink_X5000R,linksys_wrt3200acm"). Vuoto = tutti i device dell\'org.'
         )
         choice(
             name: 'VPN_VARIANTS',
-            choices: ['ALL', 'NO', 'ZeroTier', 'WireGuard', 'DualVPN'],
+            choices: ['ALL', 'NONE', 'ZeroTier', 'WireGuard', 'Dual'],
             description: 'Varianti VPN (ALL = tutte e 4)'
         )
         booleanParam(
             name: 'CAPTIVE_PORTAL_VARIANTS',
-            defaultValue: false,
-            description: 'Compila ogni variante sia con che senza Captive Portal'
+            defaultValue: true,
+            description: 'Compila ogni variante sia con che senza Captive Portal (allineato a openwrt_cp_variants in ninux.yml)'
+        )
+        choice(
+            name: 'CAPTIVE_PORTAL_ENGINE',
+            choices: ['config', 'uspot'],
+            description: 'Motore Captive Portal: "config" usa ninux.yml (incl. eventuali override per org); "uspot" lo forza. Oggi uspot e\' l\'unico motore (coova-chilli rimosso).'
+        )
+        booleanParam(
+            name: 'USE_IMAGEBUILDER',
+            defaultValue: true,
+            description: 'Compila UN seed per device e assembla le varianti con l\'ImageBuilder invece di ricompilare ogni variante da sorgente: 6 compilazioni complete invece di 12. Deselezionare per tornare al percorso storico.'
+        )
+        booleanParam(
+            name: 'IB_FORCE_SEED',
+            defaultValue: true,
+            description: 'Ricompila il seed anche se un ImageBuilder e\' gia\' in cache. Attivo di default: si compila di rado e quasi sempre per una nuova versione OpenWrt, quindi la cache sarebbe comunque da buttare. Deselezionarlo fa risparmiare ore, ma solo se si e\' certi che la configurazione non sia cambiata.'
         )
         booleanParam(
             name: 'SKIP_DEPS',
@@ -47,25 +67,25 @@ pipeline {
             defaultValue: '20G',
             description: 'Dimensione max ccache'
         )
-        booleanParam(
+        choice(
             name: 'OPENWISP_UPLOAD',
-            defaultValue: false,
-            description: 'Carica su OpenWISP Firmware Upgrader'
+            choices: ['config', 'on', 'off'],
+            description: 'Carica su OpenWISP Firmware Upgrader: "config" segue openwisp_upload_enabled di ninux.yml, "on"/"off" lo forzano. Era un booleano, ma un booleano non sa dire "no": con openwisp_upload_enabled: true in ninux.yml, deselezionarlo non disattivava niente.'
         )
         booleanParam(
             name: 'OPENWISP_TRIGGER_UPGRADE',
             defaultValue: false,
-            description: 'Avvia batch upgrade su OpenWISP dopo upload'
+            description: 'Avvia batch upgrade su OpenWISP dopo upload: i router registrati si aggiornano DA SOLI al firmware appena caricato. Lasciare deselezionato e lanciare l\'upgrade a mano dal controller quando si e\' pronti.'
         )
         string(
             name: 'OPENWISP_URL',
             defaultValue: '',
             description: 'URL OpenWISP Firmware Upgrader (vuoto = da group_vars)'
         )
-        booleanParam(
+        choice(
             name: 'GITHUB_RELEASE',
-            defaultValue: false,
-            description: 'Crea release GitHub e carica i firmware come assets'
+            choices: ['config', 'on', 'off'],
+            description: 'Crea release GitHub coi firmware come asset: "config" segue github_release_enabled di ninux.yml, "on"/"off" lo forzano. Stesso motivo di OPENWISP_UPLOAD: da booleano non era possibile disattivarlo.'
         )
         string(
             name: 'GITHUB_REPO',
@@ -95,14 +115,20 @@ pipeline {
                         returnStdout: true
                     ).trim()
                     if (!configs) error "Nessun .config in ${configDir}"
-                    def nDev  = configs.split('\n').size()
+                    def nDev  = params.DEVICES?.trim() ? params.DEVICES.trim().split(',').size() : configs.split('\n').size()
                     def nVpn  = params.VPN_VARIANTS == 'ALL' ? 4 : 1
+                    // Un solo motore CP (uspot); il totale esatto lo stampa
+                    // comunque il playbook nel suo Piano di build
                     def nCp   = params.CAPTIVE_PORTAL_VARIANTS ? 2 : 1
                     def total = nDev * nVpn * nCp
+                    def engineLabel = params.CAPTIVE_PORTAL_VARIANTS
+                        ? (params.CAPTIVE_PORTAL_ENGINE == 'config' ? 'da ninux.yml (override per org)' : params.CAPTIVE_PORTAL_ENGINE)
+                        : 'nessuno'
                     echo """
 === Piano di build ===
 Device    : ${configs.replaceAll('\n', ', ')}
 Totale    : ${total} firmware (${nDev} dev x ${nVpn} VPN x ${nCp} CP)
+CP engine : ${engineLabel}
 Workspace : ${WORKSPACE}
 """
                     env.DISCOVERED_DEVICES = configs.replaceAll('\n', ', ')
@@ -143,18 +169,60 @@ Workspace : ${WORKSPACE}
                         "--skip-tags deps"
                     ]
                     if (params.VPN_VARIANTS != 'ALL') {
-                        args << "-e '{\"openwrt_vpn_variants\": [\"${params.VPN_VARIANTS}\"]}'"
+                        // svuota anche l'override per org, altrimenti vincerebbe sulla scelta esplicita
+                        args << "-e '{\"openwrt_vpn_variants\": [\"${params.VPN_VARIANTS}\"], \"openwrt_org_vpn_variants\": {}}'"
                     }
-                    if (params.CAPTIVE_PORTAL_VARIANTS) {
-                        args << "-e openwrt_cp_variants=true"
+                    if (params.DEVICES?.trim()) {
+                        def devs = params.DEVICES.trim().split(',').collect { "\"${it.trim()}\"" }.join(', ')
+                        args << "-e '{\"openwrt_only_targets\": [${devs}]}'"
                     }
-                    if (params.OPENWISP_UPLOAD) {
-                        args << "-e openwisp_upload_enabled=true"
-                        if (params.OPENWISP_TRIGGER_UPGRADE) args << "-e openwisp_trigger_upgrade=true"
-                        if (params.OPENWISP_URL)             args << "-e openwisp_url=${params.OPENWISP_URL}"
+                    args << "-e openwrt_cp_variants=${params.CAPTIVE_PORTAL_VARIANTS}"
+                    // "config" = motori da ninux.yml (openwrt_cp_engines + override
+                    // per org): non passare nulla, cosi' basilicata compila uspot.
+                    // Un motore esplicito forza la scelta e azzera l'override org.
+                    if (params.CAPTIVE_PORTAL_VARIANTS && params.CAPTIVE_PORTAL_ENGINE != 'config') {
+                        def enginesJson = "\"${params.CAPTIVE_PORTAL_ENGINE}\""
+                        args << "-e '{\"openwrt_cp_engines\": [${enginesJson}], \"openwrt_org_cp_engines\": {}}'"
                     }
+                    // 'config' = non passare nulla, decide ninux.yml.
+                    // Passare esplicitamente false e' l'unico modo per spegnere
+                    // un openwisp_upload_enabled: true che arriva da ninux.yml.
+                    if (params.OPENWISP_UPLOAD != 'config') {
+                        args << "-e openwisp_upload_enabled=${params.OPENWISP_UPLOAD == 'on'}"
+                    }
+                    // Sempre espliciti: con openwrt_use_imagebuilder: true in
+                    // config/build.yml, un "if (params.X)" non saprebbe spegnerlo.
+                    args << "-e openwrt_use_imagebuilder=${params.USE_IMAGEBUILDER}"
+                    args << "-e openwrt_ib_force_seed=${params.IB_FORCE_SEED}"
+                    // Sempre esplicito: aggiorna i router in campo, non deve
+                    // poter partire da una configurazione dimenticata a true.
+                    args << "-e openwisp_trigger_upgrade=${params.OPENWISP_TRIGGER_UPGRADE}"
+                    if (params.OPENWISP_URL)             args << "-e openwisp_url=${params.OPENWISP_URL}"
                     args << "--vault-password-file ${VAULT_PASS_FILE}"
                     sh args.join(' ')
+
+                    // Un upload OpenWISP fallito (es. controller irraggiungibile) non
+                    // fa piu' fallire la build: il firmware resta compilato, archiviato
+                    // e pubblicato. Qui la build diventa UNSTABLE (gialla) cosi' non
+                    // passa inosservato che sul controller manca il firmware nuovo.
+                    def uploadFailed = "${WORKSPACE}/output/.openwisp-upload-failed"
+                    if (fileExists(uploadFailed)) {
+                        currentBuild.result = 'UNSTABLE'
+                        echo "=== ATTENZIONE: upload OpenWISP fallito per queste varianti ==="
+                        echo readFile(uploadFailed).trim()
+                        echo "I firmware sono stati compilati e archiviati: vanno ricaricati " +
+                             "su ${params.OPENWISP_URL ?: 'OpenWISP'} quando il controller torna raggiungibile."
+                    }
+
+                    // Target non presenti nella hardware map di OpenWISP: upload saltato
+                    // di proposito (non e' un errore, quindi la build resta SUCCESS).
+                    def owUnsupported = "${WORKSPACE}/output/.openwisp-unsupported"
+                    if (fileExists(owUnsupported)) {
+                        echo "=== INFO: target non supportati da OpenWISP (upload saltato) ==="
+                        echo readFile(owUnsupported).trim()
+                        echo "Per caricarli: aggiungi la voce in config/build.yml (openwisp_image_type_map) " +
+                             "e configura OPENWISP_CUSTOM_OPENWRT_IMAGES sul controller."
+                    }
                 }
             }
         }
@@ -195,7 +263,8 @@ Workspace : ${WORKSPACE}
         stage('GitHub Release') {
             when {
                 expression {
-                    params.GITHUB_RELEASE || sh(
+                    if (params.GITHUB_RELEASE != 'config') return params.GITHUB_RELEASE == 'on'
+                    return sh(
                         script: "grep -qE '^github_release_enabled:\\s*true' ${WORKSPACE}/ninux.yml && echo yes || echo no",
                         returnStdout: true
                     ).trim() == 'yes'
@@ -247,32 +316,66 @@ Workspace : ${WORKSPACE}
 
                             def notes = "Build Jenkins #${env.BUILD_NUMBER}\\nOrg: ${org}\\nOpenWrt: ${version}\\nDevice: ${device}\\nVarianti: ${variants}"
 
-                            // Crea release per questo device via python3 per gestire JSON
+                            // Crea la release; se il tag esiste gia' (HTTP 422,
+                            // es. rebuild della stessa versione) riusa quella
+                            // esistente aggiornandone titolo e note.
                             def releaseId = sh(
                                 script: """python3 -c "
-import urllib.request, json, os, sys
-data = json.dumps({
+import urllib.request, urllib.error, json, os, sys
+
+API = 'https://api.github.com/repos/${repo}/releases'
+HDRS = {
+    'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+    'Content-Type': 'application/json'
+}
+payload = {
     'tag_name': '${tag}',
     'name': 'Ninux OpenWrt ${version} | ${org} | ${device}',
     'body': '${notes}',
     'draft': False,
     'prerelease': '${prerel}' == 'true'
-}).encode()
-req = urllib.request.Request(
-    'https://api.github.com/repos/${repo}/releases',
-    data=data,
-    headers={
-        'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
-        'Content-Type': 'application/json'
-    }
-)
-resp = urllib.request.urlopen(req)
-print(json.loads(resp.read())['id'])
+}
+
+try:
+    resp = urllib.request.urlopen(urllib.request.Request(
+        API, data=json.dumps(payload).encode(), headers=HDRS))
+    print(json.loads(resp.read())['id'])
+except urllib.error.HTTPError as e:
+    if e.code != 422:
+        raise
+    # tag gia' esistente: recupera la release e aggiorna nome/note
+    resp = urllib.request.urlopen(urllib.request.Request(
+        'https://api.github.com/repos/${repo}/releases/tags/${tag}', headers=HDRS))
+    rid = json.loads(resp.read())['id']
+    urllib.request.urlopen(urllib.request.Request(
+        API + '/' + str(rid), data=json.dumps(payload).encode(),
+        headers=HDRS, method='PATCH'))
+    print(rid)
 " """,
                                 returnStdout: true
                             ).trim()
 
-                            echo "Release creata: ${tag}  (ID=${releaseId})"
+                            echo "Release: ${tag}  (ID=${releaseId})"
+
+                            // Asset gia' presenti sulla release (rebuild): vanno
+                            // sostituiti, altrimenti l'upload risponde 422 e sulla
+                            // release resterebbe il firmware VECCHIO.
+                            def oldAssetsRaw = sh(
+                                script: """python3 -c "
+import urllib.request, json, os
+req = urllib.request.Request(
+    'https://api.github.com/repos/${repo}/releases/${releaseId}/assets?per_page=100',
+    headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN']})
+for a in json.loads(urllib.request.urlopen(req).read()):
+    print(str(a['id']) + '\\t' + a['name'])
+" """,
+                                returnStdout: true
+                            ).trim()
+                            def oldAssets = [:]
+                            oldAssetsRaw.split('\n').each { line ->
+                                def parts = line.trim().split('\t')
+                                if (parts.size() == 2) oldAssets[parts[1]] = parts[0]
+                            }
 
                             // Upload firmware di questo device
                             // Struttura asset: Standard__VPN-NO__openwrt-x86-64-...-efi.img.gz
@@ -295,6 +398,12 @@ print(json.loads(resp.read())['id'])
                                 def assetName = fp
                                     .replace("${deviceDir}/", '')
                                     .replaceAll('/', '__')
+
+                                if (oldAssets[assetName]) {
+                                    sh """curl -s -o /dev/null -X DELETE \
+  -H "Authorization: Bearer \$GH_TOKEN" \
+  "https://api.github.com/repos/${repo}/releases/assets/${oldAssets[assetName]}" """
+                                }
 
                                 def code = sh(
                                     script: """curl -s -o /dev/null -w "%{http_code}" \

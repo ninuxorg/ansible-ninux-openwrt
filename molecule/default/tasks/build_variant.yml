@@ -1,0 +1,47 @@
+---
+# Una variante: esegue il ruolo e poi congela ciò che ha prodotto, perché la
+# variante successiva sovrascrive .config e l'overlay files/ nel buildroot.
+
+- name: "Esegui il ruolo (VPN={{ variant.vpn }} CP={{ variant.engine if variant.cp else 'NO' }})"
+  ansible.builtin.include_role:
+    name: ninux_build_openwrt
+  vars:
+    openwrt_work_dir: "{{ t_work_dir }}"
+    openwrt_config_local_path: "{{ t_repo_dir }}/config"
+    openwrt_nfs_dir: "{{ t_work_dir }}/nfs"
+    openwrt_org: "{{ t_org }}"
+    openwrt_target: "{{ t_target }}"
+    openwrt_version: "{{ t_version }}"
+    openwrt_vpn: "{{ variant.vpn }}"
+    openwrt_captive_portal: "{{ variant.cp }}"
+    openwrt_cp_engine: "{{ variant.engine }}"
+    # niente ccache/tmpfs: richiedono root e non c'e' niente da compilare
+    openwrt_ccache_enabled: false
+    openwrt_tmpfs_enabled: false
+    openwrt_make_jobs: 2
+    # upload verso il mock, non verso il controller vero
+    # (la variante "offline" lo punta a una porta chiusa: controller giu')
+    openwisp_upload_enabled: true
+    openwisp_url: "{{ variant.openwisp_url | default(t_openwisp_url) }}"
+    openwisp_org_id: "{{ t_org_id }}"
+    openwisp_orgs: "{{ t_openwisp_orgs }}"
+    openwisp_replace_build: true
+    openwisp_keep_versions: "{{ t_keep_versions }}"
+    openwisp_trigger_upgrade: false
+
+- name: "Congela l'overlay prodotto ({{ variant.key }})"
+  ansible.builtin.copy:
+    src: "{{ t_src_dir }}/files/"
+    dest: "{{ t_snapshot_dir }}/{{ variant.key }}/files/"
+    remote_src: true
+    mode: preserve
+
+- name: "Congela .config e feeds.conf ({{ variant.key }})"
+  ansible.builtin.copy:
+    src: "{{ t_src_dir }}/{{ item }}"
+    dest: "{{ t_snapshot_dir }}/{{ variant.key }}/{{ item }}"
+    remote_src: true
+    mode: "0644"
+  loop:
+    - .config
+    - feeds.conf

@@ -1,0 +1,31 @@
+# Estensione Captive Portal (uspot)
+#
+# Pacchetti dal feed 'packages' upstream (net/uspot), nessun feed extra.
+# Richiede firewall4/nftables (default OpenWrt) e ucode.
+# La configurazione (/etc/config/uspot) NON sta nel firmware: la spinge OpenWISP
+# come template.
+
+CONFIG_PACKAGE_uspot=y
+CONFIG_PACKAGE_uspot-www=y
+CONFIG_PACKAGE_uspotfilter=y
+
+# Web server per le pagine del portale (uspot gira su uhttpd + ucode)
+CONFIG_PACKAGE_uhttpd=y
+CONFIG_PACKAGE_uhttpd-mod-ucode=y
+
+# Firewall nftables (uspot NON funziona con iptables legacy)
+CONFIG_PACKAGE_firewall4=y
+CONFIG_PACKAGE_nftables-json=y
+CONFIG_PACKAGE_kmod-nft-core=y
+
+# Dipendenze uspot / uspotfilter
+CONFIG_PACKAGE_conntrack=y
+CONFIG_PACKAGE_ucode=y
+CONFIG_PACKAGE_ucode-mod-bpf=y
+CONFIG_PACKAGE_ucode-mod-struct=y
+CONFIG_PACKAGE_ucode-mod-uci=y
+CONFIG_PACKAGE_ucode-mod-uloop=y
+CONFIG_PACKAGE_ucode-mod-log=y
+CONFIG_PACKAGE_ucode-mod-rtnl=y
+CONFIG_PACKAGE_kmod-sched-core=y
+CONFIG_PACKAGE_kmod-sched-bpf=y

@@ -7,7 +7,6 @@ Contiene i file di configurazione OpenWrt per tutte le organizzazioni Ninux.
 ```
 config/
 ├── base.config                          # Pacchetti comuni a tutti i target
-├── chilli.ext                           # Estensione Captive Portal
 ├── zerotier.ext                         # Estensione ZeroTier
 ├── wireguard.ext                        # Estensione WireGuard
 ├── organizations/

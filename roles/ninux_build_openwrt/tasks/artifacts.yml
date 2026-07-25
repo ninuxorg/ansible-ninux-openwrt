@@ -1,19 +1,25 @@
 ---
 # tasks/artifacts.yml - Copia firmware in output/ e su NFS
 
+- name: Calcola nome variante Captive Portal
+  ansible.builtin.set_fact:
+    _cp_flavor: >-
+      {{
+        'Standard' if not openwrt_captive_portal | bool
+        else 'CaptivePortal-' + openwrt_cp_engine
+      }}
+
 - name: Calcola percorsi artefatti
   ansible.builtin.set_fact:
     _artifact_local: >-
       {{
         openwrt_output_dir + '/' + openwrt_version + '/' + openwrt_org + '/' +
-        ('CaptivePortal' if openwrt_captive_portal | bool else 'Standard') +
-        '/VPN-' + openwrt_vpn + '/' + openwrt_target
+        _cp_flavor + '/VPN-' + _vpn + '/' + openwrt_target
       }}
     _artifact_nfs: >-
       {{
         openwrt_nfs_dir + '/' + openwrt_version + '/' + openwrt_org + '/' +
-        ('CaptivePortal' if openwrt_captive_portal | bool else 'Standard') +
-        '/VPN-' + openwrt_vpn + '/' + openwrt_target
+        _cp_flavor + '/VPN-' + _vpn + '/' + openwrt_target
       }}
 
 - name: Debug percorsi
@@ -105,6 +111,7 @@
   ansible.builtin.file:
     path: "{{ openwrt_src_dir }}/bin"
     state: "{{ item }}"
+    mode: "0755"
   loop: [absent, directory]
 
 - name: Verifica file copiati in output/
@@ -140,8 +147,93 @@
     - (openwisp_orgs[openwrt_org] is not defined or
        openwisp_orgs[openwrt_org].api_token is not defined)
 
-- name: Upload firmware su OpenWISP Firmware Upgrader
-  ansible.builtin.include_tasks: openwisp_upload.yml
+# L'upload NON deve buttare via la compilazione: se il controller e' irraggiungibile
+# (e' gia' successo: server giu', errore "No route to host") un fallimento qui
+# faceva fallire l'intera pipeline DOPO la build, saltando archiviazione e release
+# GitHub. Il firmware era buono e veniva perso.
+# Qui l'errore viene catturato, lasciato scritto in un file di segnalazione, e la
+# build prosegue: il Jenkinsfile legge quel file e marca la build UNSTABLE.
+# Con openwisp_upload_fatal: true si torna al comportamento di prima.
+# OpenWISP abbina device e firmware sul campo `type`, che deve essere una chiave
+# nota della sua hardware map. Un target senza voce in openwisp_image_type_map
+# darebbe 400 in upload: lo saltiamo e lo annotiamo, la build prosegue.
+- name: "[OpenWISP] Avviso se il target non è nella hardware map OpenWISP"
+  ansible.builtin.debug:
+    msg: >-
+      ATTENZIONE: target '{{ openwrt_target }}' non presente in
+      openwisp_image_type_map: OpenWISP non lo riconosce (upload saltato).
+      Per caricarlo, aggiungi la voce in config/build.yml E configura
+      OPENWISP_CUSTOM_OPENWRT_IMAGES sul controller.
   when:
     - openwisp_upload_enabled | bool
     - _ow_token_global is defined
+    - openwisp_image_type_map[openwrt_target] is not defined
+
+- name: "[OpenWISP] Registra il target non supportato"
+  ansible.builtin.lineinfile:
+    path: "{{ openwrt_output_dir }}/.openwisp-unsupported"
+    line: "{{ openwrt_org }}/{{ openwrt_target }} — non in openwisp_image_type_map"
+    create: true
+    mode: "0644"
+  when:
+    - openwisp_upload_enabled | bool
+    - _ow_token_global is defined
+    - openwisp_image_type_map[openwrt_target] is not defined
+
+- name: Upload firmware su OpenWISP Firmware Upgrader
+  when:
+    - openwisp_upload_enabled | bool
+    - _ow_token_global is defined
+    - openwisp_image_type_map[openwrt_target] is defined
+  block:
+    - name: Esegui l'upload su OpenWISP
+      ansible.builtin.include_tasks: openwisp_upload.yml
+
+  rescue:
+    # Il corpo della risposta HTTP non contiene il token (che sta solo nella
+    # riga di comando, coperta da no_log): si puo' mostrare in chiaro.
+    - name: "[OpenWISP] Componi il dettaglio dell'errore"
+      ansible.builtin.set_fact:
+        _ow_fail_detail: >-
+          {{
+            (_ow_upload_result.results | default([])
+             | selectattr('failed', 'defined') | selectattr('failed')
+             | map(attribute='stdout') | map('default', '(nessuna risposta)')
+             | map('truncate', 200) | list | join(' | '))
+            or (ansible_failed_task.name | default('?') ~ ': ' ~
+                (ansible_failed_result.msg | default('errore sconosciuto') | truncate(200)))
+          }}
+
+    - name: "[OpenWISP] Risposte del controller per i file rifiutati"
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.path | basename }} → HTTP
+          {{ item.stdout_lines | default(['?']) | last }} —
+          {{ (item.stdout_lines | default(['(nessuna risposta)']))[:-1] | join(' ') | truncate(400) }}
+      loop: "{{ _ow_upload_result.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.path | default('?') | basename }}"
+      when: item.failed | default(false)
+
+    - name: "[OpenWISP] Upload fallito: registra la variante e prosegui"
+      ansible.builtin.lineinfile:
+        path: "{{ openwrt_output_dir }}/.openwisp-upload-failed"
+        line: >-
+          {{ openwrt_org }}/{{ openwrt_target }} VPN={{ _vpn }}
+          CP={{ openwrt_cp_engine if openwrt_captive_portal | bool else 'NONE' }}
+          — {{ _ow_fail_detail }}
+        create: true
+        mode: "0644"
+
+    - name: "[OpenWISP] Avviso: firmware NON caricato sul controller"
+      ansible.builtin.debug:
+        msg: >-
+          ATTENZIONE: upload su {{ openwisp_url }} fallito per
+          {{ openwrt_target }} VPN={{ _vpn }}. Il firmware e' stato comunque
+          compilato e archiviato: va ricaricato quando il controller torna
+          raggiungibile. Dettaglio: {{ _ow_fail_detail }}
+
+    - name: "[OpenWISP] Fallisci comunque (openwisp_upload_fatal: true)"
+      ansible.builtin.fail:
+        msg: "Upload OpenWISP fallito e openwisp_upload_fatal e' true."
+      when: openwisp_upload_fatal | default(false) | bool

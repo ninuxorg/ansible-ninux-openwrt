@@ -34,10 +34,29 @@
           - openwrt_vpn_variants is defined and openwrt_vpn_variants | length > 0
         fail_msg: "Definisci openwrt_org e openwrt_target"
 
+    - name: Rifiuta le org di solo esempio
+      ansible.builtin.assert:
+        that:
+          - openwrt_org not in (openwrt_example_orgs | default([]))
+        fail_msg: >-
+          L'org '{{ openwrt_org }}' e' solo un esempio e non va compilata.
+          Usa un'org reale (es. -e openwrt_org=basilicata) o creane una nuova
+          (vedi README, sezione "Aggiungere device e organizzazioni").
+
+    - name: Calcola dimensione Captive Portal (none + un motore per build)
+      ansible.builtin.set_fact:
+        _cp_dim: >-
+          {{
+            (['none'] + ((openwrt_org_cp_engines | default({}))[openwrt_org] | default(openwrt_cp_engines)))
+            if openwrt_cp_variants | bool
+            else ([((openwrt_org_cp_engines | default({}))[openwrt_org] | default(openwrt_cp_engines))[0]]
+                  if openwrt_captive_portal | default(false) | bool else ['none'])
+          }}
+
     - name: Costruisce matrice di build
       ansible.builtin.set_fact:
-        _build_matrix: "{{ _build_matrix | default([]) + [{'vpn': item.0, 'cp': item.1}] }}"
-      loop: "{{ openwrt_vpn_variants | product([false, true] if openwrt_cp_variants | bool else [openwrt_captive_portal | default(false) | bool]) | list }}"
+        _build_matrix: "{{ _build_matrix | default([]) + [{'vpn': item.0, 'cp': item.1 != 'none', 'engine': item.1}] }}"
+      loop: "{{ (openwrt_org_vpn_variants | default({}))[openwrt_org] | default(openwrt_vpn_variants) | product(_cp_dim) | list }}"
       loop_control:
         label: "VPN={{ item.0 }} CP={{ item.1 }}"
 
@@ -45,16 +64,17 @@
       ansible.builtin.debug:
         msg: |
           Org={{ openwrt_org }} Target={{ openwrt_target }} Ver={{ openwrt_version }}
-          {% for b in _build_matrix %}[{{ loop.index }}] VPN={{ b.vpn }} CP={{ b.cp }}
+          {% for b in _build_matrix %}[{{ loop.index }}] VPN={{ b.vpn }} CP={{ b.engine if b.cp else 'NO' }}
           {% endfor %}
 
   tasks:
-    - name: "Build VPN={{ item.vpn }} CP={{ item.cp }}"
+    - name: "Build VPN={{ item.vpn }} CP={{ item.engine if item.cp else 'NO' }}"
       ansible.builtin.include_role:
         name: ninux_build_openwrt
       vars:
         openwrt_vpn: "{{ item.vpn }}"
         openwrt_captive_portal: "{{ item.cp }}"
+        openwrt_cp_engine: "{{ item.engine | default('uspot') }}"
       loop: "{{ _build_matrix }}"
       loop_control:
-        label: "VPN={{ item.vpn }} CP={{ item.cp }}"
+        label: "VPN={{ item.vpn }} CP={{ item.engine if item.cp else 'NO' }}"

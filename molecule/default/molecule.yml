@@ -1,0 +1,46 @@
+---
+# Scenario "default": compila (in finta) UN device, tre varianti, contro un
+# OpenWISP mock. Gira su localhost, senza Docker: la parte pesante della build
+# vera (clone OpenWrt, feeds, toolchain) e' sostituita da stub, quindi il giro
+# completo dura secondi invece di ore.
+#
+# Locale:  molecule test
+# CI:      .github/workflows/ci.yml
+
+driver:
+  name: default
+  options:
+    managed: false
+
+platforms:
+  - name: localhost
+
+provisioner:
+  name: ansible
+  env:
+    # Il ruolo sta in roles/ del repo, non nel path di default di Molecule
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+  options:
+    # deps    -> apt install della toolchain (inutile: non si compila davvero)
+    # openwrt -> clone dei sorgenti OpenWrt (sostituiti dallo stub in prepare)
+    skip-tags: "deps,openwrt"
+  inventory:
+    hosts:
+      all:
+        hosts:
+          localhost:
+            ansible_connection: local
+            ansible_python_interpreter: "{{ ansible_playbook_python }}"
+
+verifier:
+  name: ansible
+
+scenario:
+  # Niente idempotence: il ruolo esegue make/feeds, per natura non idempotenti.
+  test_sequence:
+    - dependency
+    - syntax
+    - prepare
+    - converge
+    - verify
+    - destroy

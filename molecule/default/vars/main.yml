@@ -1,0 +1,67 @@
+---
+# Variabili condivise da prepare / converge / verify dello scenario.
+# Prefisso t_ = "test", per non confonderle con quelle vere del ruolo.
+
+t_repo_dir: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+t_work_dir: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/work"
+t_src_dir: "{{ t_work_dir }}/build/openwrt"
+t_snapshot_dir: "{{ t_work_dir }}/snapshots"
+
+# Un solo device: basta a coprire tutta la logica di varianti
+t_org: "basilicata"
+t_target: "glinet_gl-mt300n-v2"
+t_version: "v25.12.5"
+
+# OpenWISP finto (files/mock_openwisp.py)
+t_openwisp_port: 8099
+t_openwisp_url: "http://127.0.0.1:8099"
+t_org_id: "28db0975-0000-0000-0000-000000000000"
+t_openwisp_orgs:
+  basilicata:
+    controller_url: "https://openwisp.test.invalid"
+    management_interface: "wg0"
+    shared_secret: "secret-di-test-non-reale"
+    api_token: "token-di-test-non-reale"
+
+# Versioni gia' presenti sul controller finto prima della build.
+# La retention (openwisp_keep_versions: 3) deve cancellare solo v24.10.0,
+# e v25.12.5 (la versione che si ricompila) deve essere SOSTITUITA.
+t_seed_versions: "v24.10.0,v25.01.1,v25.12.4,v25.12.5"
+t_keep_versions: 3
+
+# Le tre varianti simulate. Le due dimensioni sono indipendenti:
+#   VPN = NONE | ZeroTier | WireGuard | Dual   (Dual = ZeroTier E WireGuard)
+#   CP  = nessuno | uspot                      (uspot e' l'unico motore)
+# Coprono: niente VPN e niente portale; il caso reale di basilicata (uspot +
+# WireGuard con VXLAN); e VPN doppia col portale.
+t_variants:
+  - vpn: "NONE"
+    cp: false
+    engine: "uspot"
+    key: "VPN-NONE_CP-nessuno"
+    flavor: "Standard"
+    build_version: "v25.12.5-glinet_gl-mt-VPN-NO"
+  - vpn: "WireGuard"
+    cp: true
+    engine: "uspot"
+    key: "VPN-WireGuard_CP-uspot"
+    flavor: "CaptivePortal-uspot"
+    build_version: "v25.12.5-glinet_gl-mt-US-VPN-WG"
+  - vpn: "Dual"
+    cp: true
+    engine: "uspot"
+    key: "VPN-Dual_CP-uspot"
+    flavor: "CaptivePortal-uspot"
+    build_version: "v25.12.5-glinet_gl-mt-US-VPN-DV"
+
+# Variante con il controller OpenWISP irraggiungibile (porta chiusa), come nel
+# guasto reale del 14/07: il server era giu'. La build NON deve fallire — il
+# firmware va comunque compilato e archiviato — ma deve restare traccia
+# dell'upload mancato in output/.openwisp-upload-failed.
+t_offline_variant:
+  vpn: "NONE"
+  cp: false
+  engine: "uspot"
+  key: "offline"
+  flavor: "Standard"
+  openwisp_url: "http://127.0.0.1:9"

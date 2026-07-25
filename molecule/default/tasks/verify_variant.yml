@@ -1,0 +1,103 @@
+---
+# Controlli su una singola variante, a partire dallo snapshot congelato in
+# converge. exp = attese per questa variante (definite in verify.yml).
+
+- name: "Leggi il .config assemblato ({{ variant.key }})"
+  ansible.builtin.slurp:
+    src: "{{ t_snapshot_dir }}/{{ variant.key }}/.config"
+  register: _cfg_raw
+
+- name: "Decodifica il .config ({{ variant.key }})"
+  ansible.builtin.set_fact:
+    _cfg: "{{ _cfg_raw.content | b64decode }}"
+    exp: "{{ t_expected[variant.key] }}"
+
+- name: "[{{ variant.key }}] I pacchetti della variante ci sono"
+  ansible.builtin.assert:
+    that:
+      - "'CONFIG_PACKAGE_' ~ item ~ '=y' in _cfg"
+    fail_msg: "Manca CONFIG_PACKAGE_{{ item }}=y nel .config di {{ variant.key }}"
+  loop: "{{ exp.config_yes }}"
+
+- name: "[{{ variant.key }}] I pacchetti delle ALTRE varianti non ci sono"
+  ansible.builtin.assert:
+    that:
+      - "'CONFIG_PACKAGE_' ~ item ~ '=y' not in _cfg"
+    fail_msg: >-
+      CONFIG_PACKAGE_{{ item }}=y non deve stare nel .config di {{ variant.key }}:
+      finirebbe in un'immagine che non lo prevede.
+  loop: "{{ exp.config_no }}"
+
+- name: "[{{ variant.key }}] File attesi nell'overlay"
+  ansible.builtin.stat:
+    path: "{{ t_snapshot_dir }}/{{ variant.key }}/files/{{ item }}"
+  register: _overlay_present
+  loop: "{{ exp.overlay_yes }}"
+
+- name: "[{{ variant.key }}] Nessun file atteso manca"
+  ansible.builtin.assert:
+    that:
+      - _overlay_present.results | rejectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      Mancano nell'overlay di {{ variant.key }}:
+      {{ _overlay_present.results | rejectattr('stat.exists') | map(attribute='item') | list }}
+
+- name: "[{{ variant.key }}] File che NON devono finire nell'overlay"
+  ansible.builtin.stat:
+    path: "{{ t_snapshot_dir }}/{{ variant.key }}/files/{{ item }}"
+  register: _overlay_absent
+  loop: "{{ exp.overlay_no }}"
+
+- name: "[{{ variant.key }}] Nessun file di troppo nell'overlay"
+  ansible.builtin.assert:
+    that:
+      - _overlay_absent.results | selectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      Finirebbero nell'immagine {{ variant.key }} file che non le competono:
+      {{ _overlay_absent.results | selectattr('stat.exists') | map(attribute='item') | list }}
+
+- name: "[{{ variant.key }}] Leggi /etc/config/openwisp generato"
+  ansible.builtin.slurp:
+    src: "{{ t_snapshot_dir }}/{{ variant.key }}/files/etc/config/openwisp"
+  register: _openwisp_cfg
+
+- name: "[{{ variant.key }}] L'agente openwisp-config punta al controller giusto"
+  ansible.builtin.assert:
+    that:
+      - t_openwisp_orgs[t_org].controller_url in (_openwisp_cfg.content | b64decode)
+      - t_openwisp_orgs[t_org].shared_secret in (_openwisp_cfg.content | b64decode)
+      - t_openwisp_orgs[t_org].management_interface in (_openwisp_cfg.content | b64decode)
+    fail_msg: "/etc/config/openwisp non contiene url, secret o interfaccia di management"
+
+- name: "[{{ variant.key }}] Leggi feeds.conf"
+  ansible.builtin.slurp:
+    src: "{{ t_snapshot_dir }}/{{ variant.key }}/feeds.conf"
+  register: _feeds_raw
+
+- name: "[{{ variant.key }}] I feed Ninux ci sono, chilli e telephony no"
+  ansible.builtin.assert:
+    that:
+      - "'src-git openwisp_config' in (_feeds_raw.content | b64decode)"
+      - "'src-git zerotier' in (_feeds_raw.content | b64decode)"
+      - "'telephony' not in (_feeds_raw.content | b64decode)"
+      # coova-chilli e' stato rimosso: il suo feed non deve tornare
+      - "'coova-chilli' not in (_feeds_raw.content | b64decode)"
+    fail_msg: "feeds.conf non contiene i feed Ninux, o contiene feed rimossi"
+
+- name: "[{{ variant.key }}] Il firmware e' finito nel percorso di output giusto"
+  ansible.builtin.stat:
+    path: >-
+      {{ t_work_dir }}/output/{{ t_version }}/{{ t_org }}/{{ variant.flavor }}/VPN-{{ variant.vpn }}/{{ t_target }}/{{ item }}
+  register: _artifacts
+  loop:
+    - openwrt-ramips-mt76x8-glinet_gl-mt300n-v2-squashfs-sysupgrade.bin
+    - config.buildinfo
+    - sha256sums
+
+- name: "[{{ variant.key }}] Tutti gli artefatti attesi sono in output/"
+  ansible.builtin.assert:
+    that:
+      - _artifacts.results | rejectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      Mancano in output/{{ t_version }}/{{ t_org }}/{{ variant.flavor }}/VPN-{{ variant.vpn }}/{{ t_target }}/:
+      {{ _artifacts.results | rejectattr('stat.exists') | map(attribute='item') | list }}

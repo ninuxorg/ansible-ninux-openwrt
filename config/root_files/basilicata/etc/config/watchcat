@@ -2,7 +2,7 @@ config watchcat
 	option mode 'run_script'
 	option script '/root/restart-zerotier.sh'
 	option period '3m'
-	option pinghosts '172.27.253.1'
+	option pinghosts '10.27.255.1'
 	option addressfamily 'ipv4'
 	option pingperiod '30s'
 	option pingsize 'standard'

@@ -1,0 +1,81 @@
+---
+# tasks/ib_dotconfig.yml - .config del SEED per l'ImageBuilder
+#
+# Differenza rispetto a dotconfig.yml: quello compone il .config di UNA
+# variante, questo compone il SUPERSET di tutte le varianti del device. Il seed
+# viene compilato una volta sola e serve solo a produrre l'ImageBuilder e il suo
+# repository di pacchetti: l'immagine che ne esce viene scartata.
+#
+# Vengono appese tutte le estensioni: le VPN e i motori Captive Portal
+# configurati. Presuppone che i motori in openwrt_cp_engines siano compilabili
+# insieme (vero con uspot, unico rimasto).
+
+- name: "[IB seed] Rimuovi .config esistenti"
+  ansible.builtin.shell: rm -rf {{ openwrt_src_dir }}/.config*
+  changed_when: true
+
+# L'overlay di una variante precedente finirebbe dentro l'immagine del seed.
+# Non ci interessa (la scartiamo) ma sporca la build e confonde la diagnosi.
+- name: "[IB seed] Rimuovi overlay files/ residuo"
+  ansible.builtin.file:
+    path: "{{ openwrt_src_dir }}/files"
+    state: absent
+
+- name: "[IB seed] Verifica esistenza config per il target"
+  ansible.builtin.stat:
+    path: "{{ openwrt_ninux_src_dir }}/organizations/{{ openwrt_org }}/{{ openwrt_target }}.config"
+  register: _ib_target_config
+
+- name: "[IB seed] Fallisci se il config del target non esiste"
+  ansible.builtin.fail:
+    msg: >
+      Config non trovato: config/organizations/{{ openwrt_org }}/{{ openwrt_target }}.config
+  when: not _ib_target_config.stat.exists
+
+- name: "[IB seed] Copia config base del target"
+  ansible.builtin.copy:
+    src: "{{ openwrt_ninux_src_dir }}/organizations/{{ openwrt_org }}/{{ openwrt_target }}.config"
+    dest: "{{ openwrt_src_dir }}/.config"
+    remote_src: true
+    mode: "0644"
+
+- name: "[IB seed] Appendi tutte le estensioni CP e VPN"
+  ansible.builtin.shell: >
+    cat {{ openwrt_ninux_src_dir }}/{{ item }}.ext >> {{ openwrt_src_dir }}/.config
+  loop: "{{ _ib_cp_engines + ['zerotier', 'wireguard'] }}"
+  changed_when: true
+
+- name: "[IB seed] Appendi config base comune"
+  ansible.builtin.shell: cat {{ openwrt_ninux_src_dir }}/base.config >> {{ openwrt_src_dir }}/.config
+  changed_when: true
+
+- name: "[IB seed] Abilita ccache nel .config (CONFIG_CCACHE)"
+  ansible.builtin.shell: |
+    {
+      echo 'CONFIG_CCACHE=y'
+      echo 'CONFIG_CCACHE_DIR="{{ openwrt_ccache_dir }}"'
+    } >> {{ openwrt_src_dir }}/.config
+  when: _openwrt_use_ccache | default(openwrt_ccache_enabled) | bool
+  changed_when: true
+
+# Ridondante con base.config (che gia' le contiene) ma il seed senza queste
+# non produrrebbe alcun ImageBuilder e la build fallirebbe solo alla fine,
+# dopo aver compilato tutto.
+- name: "[IB seed] Forza la generazione dell'ImageBuilder standalone"
+  ansible.builtin.shell: |
+    {
+      echo 'CONFIG_IB=y'
+      echo 'CONFIG_IB_STANDALONE=y'
+    } >> {{ openwrt_src_dir }}/.config
+  changed_when: true
+
+- name: "[IB seed] Normalizza .config con make defconfig"
+  ansible.builtin.command:
+    cmd: make defconfig
+    chdir: "{{ openwrt_src_dir }}"
+  changed_when: true
+
+- name: "[IB seed] Verifica che l'ImageBuilder sia abilitato dopo defconfig"
+  ansible.builtin.command:
+    cmd: grep -qx CONFIG_IB=y {{ openwrt_src_dir }}/.config
+  changed_when: false

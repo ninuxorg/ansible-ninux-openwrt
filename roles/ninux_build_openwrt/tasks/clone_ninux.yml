@@ -1,9 +1,23 @@
 ---
 # tasks/clone_ninux.yml
 # Copia config/ dal repo nella directory di build.
+#
+# Il ruolo viene incluso una volta per variante (piu' una per seed): con 6
+# device x 4 varianti sono 30 esecuzioni della stessa copia identica, ~15s
+# l'una perche' il modulo copy ri-calcola il checksum di ogni file. config/
+# non cambia durante un run, quindi la prima volta basta: ~7 minuti risparmiati
+# su una build completa.
+#
+# Il fatto sopravvive alle invocazioni successive del ruolo nello stesso play,
+# che e' esattamente lo scopo.
 
 - name: Sincronizza config/ nella directory di build
   ansible.builtin.copy:
     src: "{{ openwrt_config_local_path }}/"
     dest: "{{ openwrt_ninux_src_dir }}/"
     mode: preserve
+  when: not _ninux_configs_synced | default(false) | bool
+
+- name: Segna config/ come gia' sincronizzata per questo run
+  ansible.builtin.set_fact:
+    _ninux_configs_synced: true

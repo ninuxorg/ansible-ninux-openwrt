@@ -1,0 +1,22 @@
+---
+# tasks/ib_cache_check.yml - L'ImageBuilder di questo device e' gia' pronto?
+#
+# Serve PRIMA di clone_openwrt e feeds: se il seed e' in cache non si compila
+# nulla, e allora clonare l'albero OpenWrt e aggiornare i feed e' lavoro
+# buttato. Il controllo stava dentro ib_seed.yml, cioe' dopo, e una build che
+# riusava tutti gli ImageBuilder pagava comunque i feed di ogni device.
+
+- name: "[IB] Calcola il percorso di cache dell'ImageBuilder"
+  ansible.builtin.set_fact:
+    _ib_cache_dir: >-
+      {{ openwrt_ib_cache_dir }}/{{ openwrt_version }}/{{ openwrt_org }}/{{ openwrt_target }}
+
+- name: "[IB] Verifica se l'ImageBuilder e' gia' in cache"
+  ansible.builtin.stat:
+    path: "{{ _ib_cache_dir }}/imagebuilder/Makefile"
+  register: _ib_cached
+
+- name: "[IB] Decidi se il seed va compilato"
+  ansible.builtin.set_fact:
+    _ib_seed_ready: >-
+      {{ _ib_cached.stat.exists and not (openwrt_ib_force_seed | default(false) | bool) }}

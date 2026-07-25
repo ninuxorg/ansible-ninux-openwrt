@@ -1,0 +1,78 @@
+---
+# prepare: costruisce l'ambiente finto in cui il ruolo girera' per davvero.
+#   - una toolchain OpenWrt stub al posto dei sorgenti veri (files/openwrt-stub/)
+#   - un OpenWISP mock in ascolto su 127.0.0.1 (files/mock_openwisp.py)
+
+- name: Prepara toolchain OpenWrt finta e controller OpenWISP mock
+  hosts: all
+  gather_facts: false
+
+  vars_files:
+    - vars/main.yml
+
+  tasks:
+    - name: Ferma un mock OpenWISP rimasto attivo da un giro precedente
+      ansible.builtin.command:
+        cmd: pkill -f mock_openwisp.py
+      register: _pkill
+      failed_when: false
+      changed_when: _pkill.rc == 0
+
+    - name: Azzera la directory di lavoro dei test
+      ansible.builtin.file:
+        path: "{{ t_work_dir }}"
+        state: absent
+
+    - name: Crea le directory di lavoro
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ t_work_dir }}"
+        - "{{ t_work_dir }}/build"
+        - "{{ t_snapshot_dir }}"
+        - "{{ t_src_dir }}"
+
+    - name: Installa la toolchain OpenWrt finta
+      ansible.builtin.copy:
+        src: "openwrt-stub/"
+        dest: "{{ t_src_dir }}/"
+        mode: "0644"
+
+    - name: Rendi eseguibile lo stub di ./scripts/feeds
+      ansible.builtin.file:
+        path: "{{ t_src_dir }}/scripts/feeds"
+        mode: "0755"
+
+    - name: Avvia il mock OpenWISP
+      ansible.builtin.shell:
+        cmd: >-
+          nohup python3 {{ playbook_dir }}/files/mock_openwisp.py
+          --port {{ t_openwisp_port }}
+          --org {{ t_org_id }}
+          --target {{ t_target }}
+          --seed {{ t_seed_versions }}
+          >> {{ t_work_dir }}/mock_openwisp.log 2>&1 &
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Attendi che il mock OpenWISP risponda
+      ansible.builtin.wait_for:
+        host: "127.0.0.1"
+        port: "{{ t_openwisp_port }}"
+        timeout: 20
+
+    - name: Verifica che il seed sia caricato
+      ansible.builtin.uri:
+        url: "{{ t_openwisp_url }}/__state__"
+        method: GET
+      register: _seed_state
+
+    - name: Il controller finto parte con 8 build preesistenti (4 versioni x 2 varianti)
+      ansible.builtin.assert:
+        that:
+          - _seed_state.json.builds | length == 8
+          - _seed_state.json.images | length == 0
+        fail_msg: "Seed del mock OpenWISP non caricato correttamente"
