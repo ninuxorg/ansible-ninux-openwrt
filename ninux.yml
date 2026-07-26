@@ -60,6 +60,7 @@ openwrt_vpn_variants:
 openwrt_org_vpn_variants:
   basilicata:
     - "ZeroTier"
+    - "NONE"
 
 # Compila anche le varianti con Captive Portal (una build in più per motore CP)
 openwrt_cp_variants: true
