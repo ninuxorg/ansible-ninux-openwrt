@@ -279,9 +279,25 @@ openwrt_feeds:
   - "src-git openwisp_config https://github.com/openwisp/openwisp-config.git"
   - "src-git openwisp_monitoring https://github.com/openwisp/openwrt-openwisp-monitoring.git"
   - "src-git zerotier https://github.com/mwarning/zerotier-openwrt.git"
+  # Feed locale dedicato a uspot (Makefile in
+  # roles/ninux_build_openwrt/files/custom-feeds/uspot/), per non dipendere dal
+  # pin del feed 'packages' di default: quello attuale porta un uspot.uc con un
+  # typo di sintassi ucode che manda il daemon in crash-loop (niente auth ne'
+  # redirect al captive portal). NB: il Makefile upstream di f00b4r0/uspot.git
+  # sta alla radice del repo (pensato per essere droppato in package/), quindi
+  # NON e' utilizzabile come feed src-git diretto (scripts/feeds non lo indicizza,
+  # 'target pattern contains no %. Stop.'): per questo lo pacchettizziamo qui con
+  # lo stesso wrapper Makefile del feed 'packages' ufficiale (PKG_SOURCE_URL/VERSION
+  # git), pinnato pero' al commit packages 50ea41e che include il fix upstream
+  # 87080bfa ("uspot: fix syntax error typo"). Il feed 'packages' resta invariato
+  # per tutti gli altri pacchetti (conntrack, libradcli, nftables-json, ecc. da
+  # cui uspot dipende); la sua copia di uspot viene rimossa sotto in
+  # openwrt_remove_packages per evitare un pacchetto duplicato.
+  - "src-link uspot {{ openwrt_build_basedir }}/custom-feeds/uspot"
 
 openwrt_remove_packages:
   - "package/feeds/luci/luci-app-apinger"
+  - "package/feeds/packages/uspot"
 
 
 # -----------------------------------------------------------------------------
