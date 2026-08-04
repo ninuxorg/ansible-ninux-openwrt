@@ -78,6 +78,29 @@ openwrt_cp_engines:
 
 
 # -----------------------------------------------------------------------------
+# SICUREZZA — Password di root di default
+#
+# Impostata nel firmware (hash in /etc/shadow via uci-defaults, mai la
+# password in chiaro) cosi' i device non restano senza password — o con
+# password vuota, accesso libero — tra il primo boot e la presa in carico da
+# parte di OpenWISP. Vale per tutte le org.
+#
+# Per generare il valore cifrato:
+#   ansible-vault encrypt_string 'LA_TUA_PASSWORD' --name 'openwrt_root_password'
+# (con ANSIBLE_VAULT_PASSWORD_FILE gia' impostato, altrimenti aggiungi
+#  --vault-password-file /var/lib/jenkins/.vault_pass)
+# -----------------------------------------------------------------------------
+
+openwrt_root_password: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          32343866656539373865643465636462653038306366386330393762396565323733656131303065
+          3864306165313166653537666263616636653964363466390a343034323161303062303634666132
+          61336539663832626133653965346533323039366534393762313265336265623737336166616266
+          3763313264363662620a346264373364653238303431363364343931383963326537386332666335
+          6239
+
+
+# -----------------------------------------------------------------------------
 # OPENWISP-CONFIG — Configurazione agente per organizzazione
 #
 # Aggiungere una sezione per ogni org Ninux.
