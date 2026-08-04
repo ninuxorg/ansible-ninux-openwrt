@@ -72,6 +72,17 @@
     - uci-defaults
 
 # -----------------------------------------------------------------------------
+# Password di root di default (vale per tutte le org, tutte le varianti)
+# -----------------------------------------------------------------------------
+
+- name: Scrivi uci-default 98-root-password
+  ansible.builtin.template:
+    src: 98-root-password.j2
+    dest: "{{ openwrt_src_dir }}/files/etc/uci-defaults/98-root-password"
+    mode: "0755"
+  when: openwrt_root_password | length > 0
+
+# -----------------------------------------------------------------------------
 # openwisp-config
 # -----------------------------------------------------------------------------
 

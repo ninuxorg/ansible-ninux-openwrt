@@ -16,10 +16,11 @@ di verita' della composizione delle varianti) in quella lista.
 
 =y e =m NON sono la stessa cosa: =y installa il pacchetto nell'immagine, =m lo
 compila soltanto, rendendolo disponibile ma fuori dal firmware. Trattarli allo
-stesso modo rompe l'immagine. Caso reale: base.config chiede sia
-wpad-mesh-wolfssl sia wpad-openssl, ma `make defconfig` risolve il conflitto
-lasciando =y solo il primo e degradando l'altro a =m. Installandoli entrambi
-apk si ferma con "unable to select packages".
+stesso modo rompe l'immagine. Caso reale: il target sceglie di default
+wpad-basic-mbedtls, che confligge con wpad-mesh-mbedtls richiesto da
+base.config (stesso ruolo, stesso "provides"); `make defconfig` risolve il
+conflitto lasciando =y solo il secondo e degradando il primo a =m.
+Installandoli entrambi apk si ferma con "unable to select packages".
 
 Il .config del seed dopo defconfig e' quindi l'autorita' su cosa la build da
 sorgente installerebbe davvero: le richieste dei file --add valgono solo se li'
@@ -41,7 +42,7 @@ Da quello discendono anche le rimozioni. Sono di tre tipi:
   di default pacchetti che l'ImageBuilder installerebbe da solo ma che il seed
              marca =m o disattivati: la build da sorgente non li mette
              nell'immagine, quindi vanno tolti. E' cosi' che sparisce
-             wpad-basic-mbedtls, che altrimenti confligge con wpad-mesh-wolfssl.
+             wpad-basic-mbedtls, che altrimenti confligge con wpad-mesh-mbedtls.
 
 --add vince su tutto: un pacchetto richiesto dalla variante resta installato.
 """

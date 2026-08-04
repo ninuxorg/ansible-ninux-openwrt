@@ -105,6 +105,11 @@ openwrt_build_deps:
   # scompattare il tarball dell'ImageBuilder (.tar.zst)
   - zstd
 
+# Password di root di default nel firmware (hash in /etc/shadow via
+# uci-defaults). Vuota = nessuna password impostata, uci-default non scritto:
+# vedi openwrt_root_password in ninux.yml (cifrata con ansible-vault).
+openwrt_root_password: ""
+
 openwisp_upload_enabled: false
 openwisp_url: ""
 openwisp_username: ""
