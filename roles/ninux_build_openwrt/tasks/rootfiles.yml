@@ -80,6 +80,7 @@
     src: 98-root-password.j2
     dest: "{{ openwrt_src_dir }}/files/etc/uci-defaults/98-root-password"
     mode: "0755"
+  when: openwrt_root_password | length > 0
 
 # -----------------------------------------------------------------------------
 # openwisp-config
