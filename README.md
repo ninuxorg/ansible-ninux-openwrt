@@ -1,5 +1,7 @@
 # ansible-ninux-openwrt
 
+[![CI](https://github.com/mikysal78/ansible-ninux-openwrt/actions/workflows/ci.yml/badge.svg)](https://github.com/mikysal78/ansible-ninux-openwrt/actions/workflows/ci.yml)
+
 Sistema di build automatizzato per firmware **OpenWrt** per i nodi della rete mesh [Ninux](http://ninux.org).
 
 ---
@@ -399,6 +401,25 @@ ansible-vault encrypt_string \
 ansible-vault encrypt_string \
   --vault-password-file /var/lib/jenkins/.vault_pass \
   'MyPassword123' --name 'openwisp_password'
+```
+
+### Esempio — password di root di default nel firmware
+
+Impostata nel firmware come hash in `/etc/shadow` (mai la password in chiaro),
+vale per tutte le org. Vuota/assente = nessuna password impostata, come prima.
+
+```bash
+ansible-vault encrypt_string \
+  --vault-password-file /var/lib/jenkins/.vault_pass \
+  'LA_TUA_PASSWORD' --name 'openwrt_root_password'
+```
+
+Output da incollare in `ninux.yml` (variabile globale, non dentro `openwisp_orgs`):
+
+```yaml
+openwrt_root_password: !vault |
+      $ANSIBLE_VAULT;1.1;AES256
+      66386439653236336462626566653337...
 ```
 
 ### Verificare che una stringa sia decifrabile
@@ -881,8 +902,6 @@ output/
         │   ├── VPN-ZeroTier/glinet_gl-mt300n-v2/
         │   ├── VPN-WireGuard/glinet_gl-mt300n-v2/
         │   └── VPN-Dual/glinet_gl-mt300n-v2/
-        ├── CaptivePortal-uspot/     <- uspot
-        │   └── VPN-*/...
         └── CaptivePortal-uspot/     <- uspot (build separata)
             └── VPN-*/...
 ```
